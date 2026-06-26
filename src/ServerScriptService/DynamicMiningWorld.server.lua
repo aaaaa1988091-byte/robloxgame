@@ -15,6 +15,7 @@ local WORLD_REFRESH_SECONDS = 10 * 60
 local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlayerDataV2")
 
 local SHOP_POSITION = Vector3.new(0, 0, -25)
+local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
 
 local folder = Workspace:FindFirstChild("DynamicMiningWorld") or Instance.new("Folder")
 folder.Name = "DynamicMiningWorld"
@@ -40,6 +41,11 @@ local teleportEvent = getRemote("RemoteEvent", "TeleportToShop")
 local shopActionEvent = getRemote("RemoteEvent", "ShopAction")
 local miningEvent = getRemote("RemoteEvent", "MiningEvent")
 local shopCatalogFunction = getRemote("RemoteFunction", "GetShopCatalog")
+
+local nextWorldRefreshTimeValue = ReplicatedStorage:FindFirstChild("NextWorldRefreshTime") or Instance.new("IntValue")
+nextWorldRefreshTimeValue.Name = "NextWorldRefreshTime"
+nextWorldRefreshTimeValue.Value = os.time() + WORLD_REFRESH_SECONDS
+nextWorldRefreshTimeValue.Parent = ReplicatedStorage
 
 local function sendNotification(player, title, text)
 	sendNotificationEvent:FireClient(player, title, text)
@@ -169,6 +175,7 @@ shopCatalogFunction.OnServerInvoke = function()
 			price = catalogItem.price,
 			action = catalogItem.action,
 			item = catalogItem.item,
+			model = catalogItem.model,
 		})
 	end
 	return serializableCatalog
@@ -458,7 +465,19 @@ local function createShopWorld()
 		post.Parent = shopModel
 	end
 
-	-- 商店櫃台（可互動）
+	-- 商店入口區：玩家踩進半透明圓圈會在客戶端自動開店，離開自動關閉。
+	local shopZone = shopModel:FindFirstChild("ShopOpenZone") or Instance.new("Part")
+	shopZone.Name = "ShopOpenZone"
+	shopZone.Shape = Enum.PartType.Cylinder
+	shopZone.Size = Vector3.new(0.25, 18, 18)
+	shopZone.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 0.08, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	shopZone.Material = Enum.Material.Neon
+	shopZone.Color = Color3.fromRGB(80, 210, 255)
+	shopZone.Transparency = 0.55
+	shopZone.Anchored = true
+	shopZone.CanCollide = false
+	shopZone.Parent = shopModel
+
 	local shopCounter = shopModel:FindFirstChild("ShopCounter") or Instance.new("Part")
 	shopCounter.Name = "ShopCounter"
 	shopCounter.Size = Vector3.new(8, 3, 2)
@@ -477,20 +496,10 @@ local function createShopWorld()
 	sign.Anchored = true
 	sign.Parent = shopModel
 
-	local prompt = shopCounter:FindFirstChild("OpenShopPrompt") or Instance.new("ProximityPrompt")
-	prompt.Name = "OpenShopPrompt"
-	prompt.ActionText = "打開商店"
-	prompt.ObjectText = "礦工棚子"
-	prompt.KeyboardKeyCode = Enum.KeyCode.E
-	prompt.HoldDuration = 0
-	prompt.MaxActivationDistance = 12
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = shopCounter
-
 	local previewBase = shopModel:FindFirstChild("ShopPreviewBase") or Instance.new("Part")
 	previewBase.Name = "ShopPreviewBase"
 	previewBase.Size = Vector3.new(10, 0.5, 10)
-	previewBase.Position = SHOP_POSITION + Vector3.new(0, 0.25, 10)
+	previewBase.Position = SHOP_PREVIEW_POSITION + Vector3.new(0, 0.25, 0)
 	previewBase.Material = Enum.Material.WoodPlanks
 	previewBase.Color = Color3.fromRGB(120, 75, 35)
 	previewBase.Anchored = true
@@ -502,7 +511,7 @@ local function createShopWorld()
 	cameraAnchor.Transparency = 1
 	cameraAnchor.CanCollide = false
 	cameraAnchor.Anchored = true
-	cameraAnchor.CFrame = CFrame.lookAt(SHOP_POSITION + Vector3.new(0, 5, 21), SHOP_POSITION + Vector3.new(0, 3, 10))
+	cameraAnchor.CFrame = CFrame.lookAt(SHOP_PREVIEW_POSITION + Vector3.new(0, 5, 11), SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
 	cameraAnchor.Parent = shopModel
 
 	local previewFolder = shopModel:FindFirstChild("ShopPreviewModels") or Instance.new("Folder")
@@ -510,17 +519,7 @@ local function createShopWorld()
 	previewFolder:ClearAllChildren()
 	previewFolder.Parent = shopModel
 
-	for index, catalogItem in ipairs(SHOP_CATALOG) do
-		local previewModel = createCatalogModel(previewFolder, catalogItem, CFrame.new(SHOP_POSITION + Vector3.new(0, 3, 10)))
-		previewModel.Name = "Preview_" .. catalogItem.id
-		for _, descendant in ipairs(previewModel:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				descendant:SetAttribute("ShopIndex", index)
-				descendant.CanCollide = false
-				descendant.Transparency = (index == 1) and 0 or 1
-			end
-		end
-	end
+	-- 商品模型由每位玩家的 LocalScript 依目錄載入到高空預覽區，避免多人同時切換商品時互相影響。
 end
 createShopWorld()
 
@@ -733,39 +732,33 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 
 		local char = player.Character
 		local root = char and char:FindFirstChild("HumanoidRootPart")
-		local startPosition = root and (root.Position + Vector3.new(0, 2, 0)) or (targetPart.Position + Vector3.new(0, 8, 0))
-		local targetPosition = targetPart.Position + Vector3.new(0, BLOCK_SIZE, 0)
+		local startPosition = root and (root.Position + Vector3.new(0, 2, 0)) or (targetPart.Position + Vector3.new(0, 5, 0))
+		local targetPosition = targetPart.Position
 		local projectile = Instance.new("Part")
 		projectile.Name = "ThrownBomb"
 		projectile.Shape = Enum.PartType.Ball
 		projectile.Size = Vector3.new(1.8, 1.8, 1.8)
 		projectile.Material = Enum.Material.Slate
 		projectile.Color = Color3.fromRGB(20, 20, 20)
+		projectile.Anchored = true
+		projectile.CanCollide = false
 		projectile.Position = startPosition
-		projectile.CanCollide = true
 		projectile.Parent = Workspace
 
-		local horizontal = Vector3.new(targetPosition.X - startPosition.X, 0, targetPosition.Z - startPosition.Z)
-		local flightTime = math.clamp(horizontal.Magnitude / 45, 0.7, 1.4)
-		local gravity = Workspace.Gravity
-		local velocity = Vector3.new(horizontal.X / flightTime, ((targetPosition.Y - startPosition.Y) + 0.5 * gravity * flightTime * flightTime) / flightTime, horizontal.Z / flightTime)
-		projectile.AssemblyLinearVelocity = velocity
-
-		local exploded = false
-		local function explodeOnce()
-			if exploded then
-				return
+		local flightTime = 0.55
+		local apexLift = math.clamp((targetPosition - startPosition).Magnitude * 0.08, 2, 6)
+		task.spawn(function()
+			local steps = 18
+			for step = 1, steps do
+				local alpha = step / steps
+				local flatPosition = startPosition:Lerp(targetPosition, alpha)
+				local arcOffset = math.sin(math.pi * alpha) * apexLift
+				projectile.Position = flatPosition + Vector3.new(0, arcOffset, 0)
+				task.wait(flightTime / steps)
 			end
-			exploded = true
-			triggerExplosion(player, projectile.Position)
+			triggerExplosion(player, targetPosition)
 			projectile:Destroy()
-		end
-		projectile.Touched:Connect(function(hit)
-			if hit and not hit:IsDescendantOf(char) then
-				explodeOnce()
-			end
 		end)
-		task.delay(flightTime + 0.6, explodeOnce)
 		return
 	end
 
@@ -844,6 +837,7 @@ end
 
 task.spawn(function()
 	while true do
+		nextWorldRefreshTimeValue.Value = os.time() + WORLD_REFRESH_SECONDS
 		task.wait(WORLD_REFRESH_SECONDS)
 		refreshWorld()
 	end

@@ -6,12 +6,14 @@ local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
+local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
 
 local sendNotificationEvent = ReplicatedStorage:WaitForChild("SendNotification")
 local teleportEvent = ReplicatedStorage:WaitForChild("TeleportToShop")
 local shopActionEvent = ReplicatedStorage:WaitForChild("ShopAction")
 local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
 local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
+local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefreshTime")
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "MiningHud"
@@ -33,6 +35,24 @@ end
 
 local homeButton = makeButton("TeleportHomeButton", "一鍵回城", UDim2.fromOffset(120, 42), UDim2.fromOffset(16, 160), gui)
 homeButton.MouseButton1Click:Connect(function()
+	teleportEvent:FireServer()
+end)
+
+local infoLabel = Instance.new("TextLabel")
+infoLabel.Name = "WorldInfo"
+infoLabel.Size = UDim2.fromOffset(260, 58)
+infoLabel.Position = UDim2.fromOffset(16, 16)
+infoLabel.BackgroundTransparency = 0.25
+infoLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+infoLabel.TextColor3 = Color3.fromRGB(255, 245, 210)
+infoLabel.TextWrapped = true
+infoLabel.TextScaled = true
+infoLabel.Parent = gui
+
+local fullBackpackButton = makeButton("FullBackpackReturnButton", "背包已滿！返回商城", UDim2.fromOffset(260, 58), UDim2.new(0.5, -130, 0.52, 0), gui)
+fullBackpackButton.BackgroundColor3 = Color3.fromRGB(170, 80, 35)
+fullBackpackButton.Visible = false
+fullBackpackButton.MouseButton1Click:Connect(function()
 	teleportEvent:FireServer()
 end)
 
@@ -70,6 +90,71 @@ local previousCameraType = nil
 local previousCameraSubject = nil
 local previousCameraCFrame = nil
 
+local localPreviewFolder = Instance.new("Folder")
+localPreviewFolder.Name = "LocalShopPreviewModels"
+localPreviewFolder.Parent = Workspace
+
+local function createLocalPreviewModel(item, index)
+	local modelData = item.model or {}
+	local model = Instance.new("Model")
+	model.Name = "LocalPreview_" .. item.id
+	model.Parent = localPreviewFolder
+
+	local mainPart
+	local function setupPart(part)
+		part.Anchored = true
+		part.CanCollide = false
+		part:SetAttribute("ShopIndex", index)
+		part.Parent = model
+		return part
+	end
+
+	if modelData.kind == "pickaxe" then
+		mainPart = setupPart(Instance.new("Part"))
+		mainPart.Name = "Handle"
+		mainPart.Size = Vector3.new(0.35, 3.2, 0.35)
+		mainPart.Material = Enum.Material.Wood
+		mainPart.Color = Color3.fromRGB(125, 78, 38)
+		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0)) * CFrame.Angles(0, 0, math.rad(25))
+
+		local head = setupPart(Instance.new("Part"))
+		head.Name = "Head"
+		head.Size = Vector3.new(2.4, 0.35, 0.35)
+		head.Material = modelData.material or Enum.Material.Wood
+		head.Color = modelData.color or Color3.fromRGB(150, 100, 50)
+		head.CFrame = mainPart.CFrame * CFrame.new(0, 1.35, 0)
+	elseif modelData.kind == "bomb" then
+		mainPart = setupPart(Instance.new("Part"))
+		mainPart.Name = "BombBody"
+		mainPart.Shape = Enum.PartType.Ball
+		mainPart.Size = Vector3.new(2.2, 2.2, 2.2)
+		mainPart.Material = modelData.material or Enum.Material.Slate
+		mainPart.Color = modelData.color or Color3.fromRGB(25, 25, 25)
+		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
+	elseif modelData.kind == "backpack" then
+		mainPart = setupPart(Instance.new("Part"))
+		mainPart.Name = "BackpackBody"
+		mainPart.Size = Vector3.new(2.2, 2.8, 1.2)
+		mainPart.Material = modelData.material or Enum.Material.Fabric
+		mainPart.Color = modelData.color or Color3.fromRGB(85, 135, 210)
+		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
+	else
+		mainPart = setupPart(Instance.new("Part"))
+		mainPart.Name = "DisplayBlock"
+		mainPart.Size = modelData.size or Vector3.new(2, 2, 2)
+		mainPart.Material = modelData.material or Enum.Material.Sand
+		mainPart.Color = modelData.color or Color3.fromRGB(235, 205, 130)
+		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
+	end
+
+	model.PrimaryPart = mainPart
+	return model
+end
+
+for index, item in ipairs(shopCatalog) do
+	createLocalPreviewModel(item, index)
+end
+
 local descriptionLabel = Instance.new("TextLabel")
 descriptionLabel.Name = "Description"
 descriptionLabel.Size = UDim2.new(1, -32, 0, 76)
@@ -95,12 +180,7 @@ local function getShopWorld()
 end
 
 local function setPreviewVisible(index)
-	local shopWorld = getShopWorld()
-	local previewFolder = shopWorld and shopWorld:FindFirstChild("ShopPreviewModels")
-	if not previewFolder then
-		return
-	end
-	for _, descendant in ipairs(previewFolder:GetDescendants()) do
+	for _, descendant in ipairs(localPreviewFolder:GetDescendants()) do
 		if descendant:IsA("BasePart") then
 			descendant.Transparency = (descendant:GetAttribute("ShopIndex") == index) and 0 or 1
 		end
@@ -122,14 +202,14 @@ local function focusShopCamera()
 	local camera = Workspace.CurrentCamera
 	local shopWorld = getShopWorld()
 	local anchor = shopWorld and shopWorld:FindFirstChild("ShopCameraAnchor")
-	if not camera or not anchor then
+	if not camera then
 		return
 	end
 	previousCameraType = camera.CameraType
 	previousCameraSubject = camera.CameraSubject
 	previousCameraCFrame = camera.CFrame
 	camera.CameraType = Enum.CameraType.Scriptable
-	camera.CFrame = anchor.CFrame
+	camera.CFrame = anchor and anchor.CFrame or CFrame.lookAt(SHOP_PREVIEW_POSITION + Vector3.new(0, 5, 11), SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
 end
 
 local function restoreCamera()
@@ -218,23 +298,67 @@ sendNotificationEvent.OnClientEvent:Connect(function(titleText, message)
 	})
 end)
 
-local function hookShopPrompt(prompt)
-	if not prompt:IsA("ProximityPrompt") then
-		return
+local function isInsideShopZone()
+	local shopWorld = getShopWorld()
+	local zone = shopWorld and shopWorld:FindFirstChild("ShopOpenZone")
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not zone or not root then
+		return false
 	end
-	if prompt.Name == "OpenShopPrompt" then
-		prompt.Triggered:Connect(function(triggeringPlayer)
-			if triggeringPlayer == player then
-				openShop()
-			end
-		end)
-	end
+	local flatDistance = Vector3.new(root.Position.X - zone.Position.X, 0, root.Position.Z - zone.Position.Z).Magnitude
+	return flatDistance <= 9
 end
 
-for _, descendant in ipairs(Workspace:GetDescendants()) do
-	hookShopPrompt(descendant)
+task.spawn(function()
+	local wasInsideShop = false
+	while true do
+		local insideShop = isInsideShopZone()
+		if insideShop and not wasInsideShop then
+			openShop()
+		elseif not insideShop and wasInsideShop then
+			closeShop()
+		end
+		wasInsideShop = insideShop
+		task.wait(0.2)
+	end
+end)
+
+local function updateInfoPanel()
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local sand = leaderstats and leaderstats:FindFirstChild("Sand")
+	local maxSand = player:FindFirstChild("MaxSand")
+	local remaining = math.max(0, nextWorldRefreshTimeValue.Value - os.time())
+	local minutes = math.floor(remaining / 60)
+	local seconds = remaining % 60
+	local sandText = sand and maxSand and (sand.Value .. "/" .. maxSand.Value) or "載入中"
+	infoLabel.Text = string.format("世界刷新：%02d:%02d\n背包：%s", minutes, seconds, sandText)
+	fullBackpackButton.Visible = sand and maxSand and sand.Value >= maxSand.Value
 end
-Workspace.DescendantAdded:Connect(hookShopPrompt)
+
+task.spawn(function()
+	while true do
+		updateInfoPanel()
+		task.wait(0.5)
+	end
+end)
+
+local function playMiningSwing()
+	local character = player.Character
+	local tool = character and character:FindFirstChildOfClass("Tool")
+	if not tool then
+		return
+	end
+	local originalGrip = tool.Grip
+	for step = 1, 6 do
+		local angle = math.sin(step / 6 * math.pi) * math.rad(45)
+		tool.Grip = originalGrip * CFrame.Angles(-angle, 0, 0)
+		task.wait(0.03)
+	end
+	if tool.Parent == character then
+		tool.Grip = originalGrip
+	end
+end
 
 mouse.Move:Connect(function()
 	updateHighlight(getMineableTarget())
@@ -252,6 +376,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 				updateHighlight(target)
 				if target then
 					miningEvent:FireServer(target)
+					task.spawn(playMiningSwing)
 				end
 				task.wait(0.2)
 			end
