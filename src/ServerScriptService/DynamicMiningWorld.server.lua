@@ -10,6 +10,7 @@ local CHUNK_RADIUS_Y = 4
 local MAX_DEPTH_BLOCKS = 4000
 local CHEST_CHANCE = 0.02
 local MAX_BACKPACK_CAPPED = 20
+local BACKPACK_UPGRADE_AMOUNT = 20
 local WORLD_REFRESH_SECONDS = 10 * 60
 local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlayerDataV2")
 
@@ -38,6 +39,7 @@ local sendNotificationEvent = getRemote("RemoteEvent", "SendNotification")
 local teleportEvent = getRemote("RemoteEvent", "TeleportToShop")
 local shopActionEvent = getRemote("RemoteEvent", "ShopAction")
 local miningEvent = getRemote("RemoteEvent", "MiningEvent")
+local shopCatalogFunction = getRemote("RemoteFunction", "GetShopCatalog")
 
 local function sendNotification(player, title, text)
 	sendNotificationEvent:FireClient(player, title, text)
@@ -84,11 +86,93 @@ local function rememberTool(player, toolName)
 	end
 end
 
-local TOOL_PRICES = {
-	["木鎬"] = 150,
-	["鐵鎬"] = 500,
-	["鑽石鎬"] = 1500,
+local SHOP_CATALOG = {
+	{
+		id = "sell_sand",
+		name = "出售沙子",
+		description = "把背包裡的沙子全部換成金幣，每顆 +5。",
+		action = "Sell",
+		item = "",
+		price = 0,
+		model = { kind = "block", size = Vector3.new(2.5, 2.5, 2.5), color = Color3.fromRGB(235, 205, 130), material = Enum.Material.Sand },
+	},
+	{
+		id = "wood_pickaxe",
+		name = "木鎬",
+		description = "工具強度 20 / 秒，適合開始挖深一點。",
+		action = "BuyTool",
+		item = "木鎬",
+		price = 150,
+		model = { kind = "pickaxe", color = Color3.fromRGB(126, 78, 36), material = Enum.Material.Wood },
+	},
+	{
+		id = "iron_pickaxe",
+		name = "鐵鎬",
+		description = "工具強度 50 / 秒，更快打穿中層沙子。",
+		action = "BuyTool",
+		item = "鐵鎬",
+		price = 500,
+		model = { kind = "pickaxe", color = Color3.fromRGB(180, 185, 190), material = Enum.Material.Metal },
+	},
+	{
+		id = "diamond_pickaxe",
+		name = "鑽石鎬",
+		description = "工具強度 100 / 秒，深層挖礦核心裝備。",
+		action = "BuyTool",
+		item = "鑽石鎬",
+		price = 1500,
+		model = { kind = "pickaxe", color = Color3.fromRGB(45, 210, 235), material = Enum.Material.Neon },
+	},
+	{
+		id = "bomb",
+		name = "炸彈",
+		description = "可無限重複購買。投擲後以拋物線飛出並爆炸。",
+		action = "BuyBomb",
+		item = "",
+		price = 50,
+		model = { kind = "bomb", color = Color3.fromRGB(25, 25, 25), material = Enum.Material.Slate },
+	},
+	{
+		id = "backpack_upgrade",
+		name = "背包升級",
+		description = "背包容量 +20。只要在這個表新增商品與模型，就會自動進商店輪播。",
+		action = "BuyBackpackUpgrade",
+		item = "20",
+		price = 300,
+		model = { kind = "backpack", color = Color3.fromRGB(85, 135, 210), material = Enum.Material.Fabric },
+	},
 }
+
+local TOOL_PRICES = {}
+for _, catalogItem in ipairs(SHOP_CATALOG) do
+	if catalogItem.action == "BuyTool" then
+		TOOL_PRICES[catalogItem.item] = catalogItem.price
+	end
+end
+
+local function getCatalogItemById(itemId)
+	for _, catalogItem in ipairs(SHOP_CATALOG) do
+		if catalogItem.id == itemId then
+			return catalogItem
+		end
+	end
+	return nil
+end
+
+shopCatalogFunction.OnServerInvoke = function()
+	local serializableCatalog = {}
+	for _, catalogItem in ipairs(SHOP_CATALOG) do
+		table.insert(serializableCatalog, {
+			id = catalogItem.id,
+			name = catalogItem.name,
+			description = catalogItem.description,
+			price = catalogItem.price,
+			action = catalogItem.action,
+			item = catalogItem.item,
+		})
+	end
+	return serializableCatalog
+end
 
 local function giveTool(player, toolName)
 	local backpack = player:WaitForChild("Backpack")
@@ -99,7 +183,27 @@ local function giveTool(player, toolName)
 
 	local tool = Instance.new("Tool")
 	tool.Name = toolName
-	tool.RequiresHandle = false
+	tool.RequiresHandle = true
+
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = Vector3.new(0.4, 3, 0.4)
+	handle.Material = Enum.Material.Wood
+	handle.Color = Color3.fromRGB(125, 78, 38)
+	handle.Parent = tool
+
+	local head = Instance.new("Part")
+	head.Name = "PickaxeHead"
+	head.Size = Vector3.new(2, 0.35, 0.35)
+	head.Material = (toolName == "鐵鎬") and Enum.Material.Metal or ((toolName == "鑽石鎬") and Enum.Material.Neon or Enum.Material.Wood)
+	head.Color = (toolName == "鐵鎬") and Color3.fromRGB(180, 185, 190) or ((toolName == "鑽石鎬") and Color3.fromRGB(45, 210, 235) or Color3.fromRGB(126, 78, 36))
+	head.CFrame = handle.CFrame * CFrame.new(0, 1.35, 0)
+	head.Parent = tool
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = handle
+	weld.Part1 = head
+	weld.Parent = handle
 	tool.Parent = backpack
 
 	local clone = tool:Clone()
@@ -112,7 +216,28 @@ local function giveBombTool(player)
 	local backpack = player:WaitForChild("Backpack")
 	local tool = Instance.new("Tool")
 	tool.Name = BOMB_TOOL_NAME
-	tool.RequiresHandle = false
+	tool.RequiresHandle = true
+
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Shape = Enum.PartType.Ball
+	handle.Size = Vector3.new(1.6, 1.6, 1.6)
+	handle.Material = Enum.Material.Slate
+	handle.Color = Color3.fromRGB(25, 25, 25)
+	handle.Parent = tool
+
+	local fuse = Instance.new("Part")
+	fuse.Name = "Fuse"
+	fuse.Size = Vector3.new(0.18, 0.7, 0.18)
+	fuse.Material = Enum.Material.Wood
+	fuse.Color = Color3.fromRGB(120, 70, 30)
+	fuse.CFrame = handle.CFrame * CFrame.new(0, 0.9, 0)
+	fuse.Parent = tool
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = handle
+	weld.Part1 = fuse
+	weld.Parent = handle
 	tool.Parent = backpack
 	return tool
 end
@@ -171,6 +296,7 @@ Players.PlayerAdded:Connect(function(player)
 		money.Value = tonumber(savedData.Coins) or 0
 		currentPickaxe.Value = savedData.CurrentPickaxe or "拳頭"
 		bombCount.Value = tonumber(savedData.BombCount) or 0
+		maxSand.Value = tonumber(savedData.MaxSand) or MAX_BACKPACK_CAPPED
 		for _, toolName in ipairs(savedData.OwnedTools or {}) do
 			rememberTool(player, toolName)
 		end
@@ -190,7 +316,8 @@ local function savePlayerData(player)
 	local currentPickaxe = player:FindFirstChild("CurrentPickaxe")
 	local bombCount = player:FindFirstChild("BombCount")
 	local ownedTools = player:FindFirstChild("OwnedTools")
-	if not leaderstats or not currentPickaxe or not bombCount or not ownedTools then
+	local maxSand = player:FindFirstChild("MaxSand")
+	if not leaderstats or not currentPickaxe or not bombCount or not ownedTools or not maxSand then
 		return
 	end
 	local toolList = {}
@@ -202,6 +329,7 @@ local function savePlayerData(player)
 			Coins = leaderstats.Coins.Value,
 			CurrentPickaxe = currentPickaxe.Value,
 			BombCount = bombCount.Value,
+			MaxSand = maxSand.Value,
 			OwnedTools = toolList,
 		})
 	end)
@@ -217,6 +345,66 @@ game:BindToClose(function()
 		savePlayerData(player)
 	end
 end)
+
+
+local function createCatalogModel(parent, itemData, pivotCFrame)
+	local model = Instance.new("Model")
+	model.Name = itemData.id .. "_Preview"
+	model.Parent = parent
+
+	local visual = itemData.model
+	local mainPart
+	if visual.kind == "pickaxe" then
+		mainPart = Instance.new("Part")
+		mainPart.Name = "Handle"
+		mainPart.Size = Vector3.new(0.35, 3.2, 0.35)
+		mainPart.Material = Enum.Material.Wood
+		mainPart.Color = Color3.fromRGB(125, 78, 38)
+		mainPart.Anchored = true
+		mainPart.CFrame = pivotCFrame * CFrame.Angles(0, 0, math.rad(25))
+		mainPart.Parent = model
+
+		local head = Instance.new("Part")
+		head.Name = "Head"
+		head.Size = Vector3.new(2.4, 0.35, 0.35)
+		head.Material = visual.material
+		head.Color = visual.color
+		head.Anchored = true
+		head.CFrame = mainPart.CFrame * CFrame.new(0, 1.35, 0)
+		head.Parent = model
+	elseif visual.kind == "bomb" then
+		mainPart = Instance.new("Part")
+		mainPart.Name = "BombBody"
+		mainPart.Shape = Enum.PartType.Ball
+		mainPart.Size = Vector3.new(2.2, 2.2, 2.2)
+		mainPart.Material = visual.material
+		mainPart.Color = visual.color
+		mainPart.Anchored = true
+		mainPart.CFrame = pivotCFrame
+		mainPart.Parent = model
+	elseif visual.kind == "backpack" then
+		mainPart = Instance.new("Part")
+		mainPart.Name = "BackpackBody"
+		mainPart.Size = Vector3.new(2.2, 2.8, 1.2)
+		mainPart.Material = visual.material
+		mainPart.Color = visual.color
+		mainPart.Anchored = true
+		mainPart.CFrame = pivotCFrame
+		mainPart.Parent = model
+	else
+		mainPart = Instance.new("Part")
+		mainPart.Name = "DisplayBlock"
+		mainPart.Size = visual.size or Vector3.new(2, 2, 2)
+		mainPart.Material = visual.material
+		mainPart.Color = visual.color
+		mainPart.Anchored = true
+		mainPart.CFrame = pivotCFrame
+		mainPart.Parent = model
+	end
+
+	model.PrimaryPart = mainPart
+	return model
+end
 
 -- ==================== 2. 建立齊平場地與實體商店 ====================
 local function createShopWorld()
@@ -299,53 +487,39 @@ local function createShopWorld()
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = shopCounter
 
-	local shopItems = {
-		{ name = "SellSandDisplay", label = "出售沙子", action = "Sell", item = "", offset = Vector3.new(-8, 2.2, -2), color = Color3.fromRGB(235, 205, 130), size = Vector3.new(2.5, 2.5, 2.5), material = Enum.Material.Sand },
-		{ name = "WoodPickaxeDisplay", label = "木鎬 $150", action = "BuyTool", item = "木鎬", offset = Vector3.new(-4, 2.2, -2), color = Color3.fromRGB(126, 78, 36), size = Vector3.new(0.7, 4, 0.7), material = Enum.Material.Wood },
-		{ name = "IronPickaxeDisplay", label = "鐵鎬 $500", action = "BuyTool", item = "鐵鎬", offset = Vector3.new(0, 2.2, -2), color = Color3.fromRGB(180, 185, 190), size = Vector3.new(0.7, 4, 0.7), material = Enum.Material.Metal },
-		{ name = "DiamondPickaxeDisplay", label = "鑽石鎬 $1500", action = "BuyTool", item = "鑽石鎬", offset = Vector3.new(4, 2.2, -2), color = Color3.fromRGB(45, 210, 235), size = Vector3.new(0.7, 4, 0.7), material = Enum.Material.Neon },
-		{ name = "BombDisplay", label = "炸彈 $50", action = "BuyBomb", item = "", offset = Vector3.new(8, 2.2, -2), color = Color3.fromRGB(25, 25, 25), size = Vector3.new(2.2, 2.2, 2.2), material = Enum.Material.Slate },
-	}
+	local previewBase = shopModel:FindFirstChild("ShopPreviewBase") or Instance.new("Part")
+	previewBase.Name = "ShopPreviewBase"
+	previewBase.Size = Vector3.new(10, 0.5, 10)
+	previewBase.Position = SHOP_POSITION + Vector3.new(0, 0.25, 10)
+	previewBase.Material = Enum.Material.WoodPlanks
+	previewBase.Color = Color3.fromRGB(120, 75, 35)
+	previewBase.Anchored = true
+	previewBase.Parent = shopModel
 
-	for _, itemData in ipairs(shopItems) do
-		local display = shopModel:FindFirstChild(itemData.name) or Instance.new("Part")
-		display.Name = itemData.name
-		display.Size = itemData.size
-		display.Position = SHOP_POSITION + itemData.offset
-		display.Material = itemData.material
-		display.Color = itemData.color
-		display.Anchored = true
-		display.Shape = (itemData.name == "BombDisplay") and Enum.PartType.Ball or Enum.PartType.Block
-		display:SetAttribute("ShopAction", itemData.action)
-		display:SetAttribute("ShopItem", itemData.item)
-		display.Parent = shopModel
+	local cameraAnchor = shopModel:FindFirstChild("ShopCameraAnchor") or Instance.new("Part")
+	cameraAnchor.Name = "ShopCameraAnchor"
+	cameraAnchor.Size = Vector3.new(1, 1, 1)
+	cameraAnchor.Transparency = 1
+	cameraAnchor.CanCollide = false
+	cameraAnchor.Anchored = true
+	cameraAnchor.CFrame = CFrame.lookAt(SHOP_POSITION + Vector3.new(0, 5, 21), SHOP_POSITION + Vector3.new(0, 3, 10))
+	cameraAnchor.Parent = shopModel
 
-		local displayPrompt = display:FindFirstChild("ShopItemPrompt") or Instance.new("ProximityPrompt")
-		displayPrompt.Name = "ShopItemPrompt"
-		displayPrompt.ActionText = itemData.label
-		displayPrompt.ObjectText = "3D 商品展示"
-		displayPrompt.KeyboardKeyCode = Enum.KeyCode.E
-		displayPrompt.HoldDuration = 0
-		displayPrompt.MaxActivationDistance = 10
-		displayPrompt.RequiresLineOfSight = false
-		displayPrompt.Parent = display
+	local previewFolder = shopModel:FindFirstChild("ShopPreviewModels") or Instance.new("Folder")
+	previewFolder.Name = "ShopPreviewModels"
+	previewFolder:ClearAllChildren()
+	previewFolder.Parent = shopModel
 
-		local priceTag = display:FindFirstChild("PriceTag") or Instance.new("BillboardGui")
-		priceTag.Name = "PriceTag"
-		priceTag.Size = UDim2.fromOffset(120, 36)
-		priceTag.StudsOffset = Vector3.new(0, 2.5, 0)
-		priceTag.AlwaysOnTop = true
-		priceTag.Parent = display
-
-		local label = priceTag:FindFirstChild("Label") or Instance.new("TextLabel")
-		label.Name = "Label"
-		label.Size = UDim2.fromScale(1, 1)
-		label.BackgroundTransparency = 0.25
-		label.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
-		label.TextColor3 = Color3.fromRGB(255, 235, 190)
-		label.TextScaled = true
-		label.Text = itemData.label
-		label.Parent = priceTag
+	for index, catalogItem in ipairs(SHOP_CATALOG) do
+		local previewModel = createCatalogModel(previewFolder, catalogItem, CFrame.new(SHOP_POSITION + Vector3.new(0, 3, 10)))
+		previewModel.Name = "Preview_" .. catalogItem.id
+		for _, descendant in ipairs(previewModel:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant:SetAttribute("ShopIndex", index)
+				descendant.CanCollide = false
+				descendant.Transparency = (index == 1) and 0 or 1
+			end
+		end
 	end
 end
 createShopWorld()
@@ -407,6 +581,14 @@ end
 
 -- 商店交易後端
 shopActionEvent.OnServerEvent:Connect(function(player, action, item)
+	local catalogItem = getCatalogItemById(action)
+	local catalogPrice = nil
+	if catalogItem then
+		action = catalogItem.action
+		item = catalogItem.item
+		catalogPrice = catalogItem.price
+	end
+
 	local lstats = player:FindFirstChild("leaderstats")
 	local currentPickaxe = player:FindFirstChild("CurrentPickaxe")
 	if not lstats or not currentPickaxe then
@@ -439,11 +621,25 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 		end
 	elseif action == "BuyBomb" then
 		local bombCount = player:FindFirstChild("BombCount")
-		if coins.Value >= 50 and bombCount then
-			coins.Value -= 50
+		local price = catalogPrice or 50
+		if coins.Value >= price and bombCount then
+			coins.Value -= price
 			bombCount.Value += 1
 			giveBombTool(player)
 			sendNotification(player, "購買成功", "獲得一枚隨身炸彈！炸彈可重複購買。")
+		else
+			sendNotification(player, "交易失敗", "金幣不足。")
+		end
+	elseif action == "BuyBackpackUpgrade" then
+		local price = catalogPrice or 300
+		local upgradeAmount = tonumber(item) or BACKPACK_UPGRADE_AMOUNT
+		if coins.Value >= price then
+			coins.Value -= price
+			local maxSand = player:FindFirstChild("MaxSand")
+			if maxSand then
+				maxSand.Value += upgradeAmount
+			end
+			sendNotification(player, "背包升級", "背包容量增加 " .. upgradeAmount .. "！")
 		else
 			sendNotification(player, "交易失敗", "金幣不足。")
 		end
@@ -534,22 +730,42 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 			bombCount.Value = math.max(0, bombCount.Value - 1)
 		end
 		currentTool:Destroy()
-		local bVisual = Instance.new("Part")
-		bVisual.Size = Vector3.new(2, 2, 2)
-		bVisual.Position = targetPart.Position + Vector3.new(0, BLOCK_SIZE, 0)
-		bVisual.Color = Color3.fromRGB(20, 20, 20)
-		bVisual.Anchored = true
-		bVisual.Parent = Workspace
-		task.spawn(function()
-			for _ = 1, 3 do
-				bVisual.Transparency = 0.5
-				task.wait(0.15)
-				bVisual.Transparency = 0
-				task.wait(0.15)
+
+		local char = player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local startPosition = root and (root.Position + Vector3.new(0, 2, 0)) or (targetPart.Position + Vector3.new(0, 8, 0))
+		local targetPosition = targetPart.Position + Vector3.new(0, BLOCK_SIZE, 0)
+		local projectile = Instance.new("Part")
+		projectile.Name = "ThrownBomb"
+		projectile.Shape = Enum.PartType.Ball
+		projectile.Size = Vector3.new(1.8, 1.8, 1.8)
+		projectile.Material = Enum.Material.Slate
+		projectile.Color = Color3.fromRGB(20, 20, 20)
+		projectile.Position = startPosition
+		projectile.CanCollide = true
+		projectile.Parent = Workspace
+
+		local horizontal = Vector3.new(targetPosition.X - startPosition.X, 0, targetPosition.Z - startPosition.Z)
+		local flightTime = math.clamp(horizontal.Magnitude / 45, 0.7, 1.4)
+		local gravity = Workspace.Gravity
+		local velocity = Vector3.new(horizontal.X / flightTime, ((targetPosition.Y - startPosition.Y) + 0.5 * gravity * flightTime * flightTime) / flightTime, horizontal.Z / flightTime)
+		projectile.AssemblyLinearVelocity = velocity
+
+		local exploded = false
+		local function explodeOnce()
+			if exploded then
+				return
 			end
-			triggerExplosion(player, bVisual.Position)
-			bVisual:Destroy()
+			exploded = true
+			triggerExplosion(player, projectile.Position)
+			projectile:Destroy()
+		end
+		projectile.Touched:Connect(function(hit)
+			if hit and not hit:IsDescendantOf(char) then
+				explodeOnce()
+			end
 		end)
+		task.delay(flightTime + 0.6, explodeOnce)
 		return
 	end
 

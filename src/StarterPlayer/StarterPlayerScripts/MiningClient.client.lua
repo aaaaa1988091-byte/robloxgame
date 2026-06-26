@@ -11,6 +11,7 @@ local sendNotificationEvent = ReplicatedStorage:WaitForChild("SendNotification")
 local teleportEvent = ReplicatedStorage:WaitForChild("TeleportToShop")
 local shopActionEvent = ReplicatedStorage:WaitForChild("ShopAction")
 local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
+local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "MiningHud"
@@ -37,8 +38,8 @@ end)
 
 local shopFrame = Instance.new("Frame")
 shopFrame.Name = "ShopFrame"
-shopFrame.Size = UDim2.fromOffset(320, 300)
-shopFrame.Position = UDim2.new(0.5, -160, 0.5, -150)
+shopFrame.Size = UDim2.fromOffset(380, 240)
+shopFrame.Position = UDim2.new(0.5, -190, 1, -260)
 shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 shopFrame.Visible = false
 shopFrame.Parent = gui
@@ -53,27 +54,125 @@ title.TextColor3 = Color3.fromRGB(255, 235, 190)
 title.TextScaled = true
 title.Parent = shopFrame
 
+local closeShop
+
 local closeButton = makeButton("CloseButton", "X", UDim2.fromOffset(36, 36), UDim2.new(1, -44, 0, 8), shopFrame)
 closeButton.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
 closeButton.MouseButton1Click:Connect(function()
-	shopFrame.Visible = false
+	if closeShop then
+		closeShop()
+	end
 end)
 
-local actions = {
-	{ "SellSand", "出售沙子 (+5/顆)", "Sell" },
-	{ "BuyWoodPickaxe", "購買木鎬 $150", "BuyTool", "木鎬" },
-	{ "BuyIronPickaxe", "購買鐵鎬 $500", "BuyTool", "鐵鎬" },
-	{ "BuyDiamondPickaxe", "購買鑽石鎬 $1500", "BuyTool", "鑽石鎬" },
-	{ "BuyBomb", "購買炸彈 $50", "BuyBomb" },
-}
+local shopCatalog = shopCatalogFunction:InvokeServer()
+local selectedShopIndex = 1
+local previousCameraType = nil
+local previousCameraSubject = nil
+local previousCameraCFrame = nil
 
-for index, action in ipairs(actions) do
-	local button = makeButton(action[1], action[2], UDim2.new(1, -32, 0, 38), UDim2.fromOffset(16, 56 + (index - 1) * 44), shopFrame)
-	button.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
-	button.MouseButton1Click:Connect(function()
-		shopActionEvent:FireServer(action[3], action[4])
-	end)
+local descriptionLabel = Instance.new("TextLabel")
+descriptionLabel.Name = "Description"
+descriptionLabel.Size = UDim2.new(1, -32, 0, 76)
+descriptionLabel.Position = UDim2.fromOffset(16, 56)
+descriptionLabel.BackgroundTransparency = 0.25
+descriptionLabel.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
+descriptionLabel.TextColor3 = Color3.fromRGB(255, 235, 190)
+descriptionLabel.TextWrapped = true
+descriptionLabel.TextScaled = true
+descriptionLabel.Parent = shopFrame
+
+local previousButton = makeButton("PreviousItem", "◀ 上一個", UDim2.fromOffset(110, 42), UDim2.fromOffset(16, 150), shopFrame)
+previousButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
+
+local buyButton = makeButton("BuySelected", "購買", UDim2.fromOffset(120, 42), UDim2.fromOffset(130, 150), shopFrame)
+buyButton.BackgroundColor3 = Color3.fromRGB(35, 95, 55)
+
+local nextButton = makeButton("NextItem", "下一個 ▶", UDim2.fromOffset(110, 42), UDim2.fromOffset(254, 150), shopFrame)
+nextButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
+
+local function getShopWorld()
+	return Workspace:FindFirstChild("MiningShopWorld")
 end
+
+local function setPreviewVisible(index)
+	local shopWorld = getShopWorld()
+	local previewFolder = shopWorld and shopWorld:FindFirstChild("ShopPreviewModels")
+	if not previewFolder then
+		return
+	end
+	for _, descendant in ipairs(previewFolder:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Transparency = (descendant:GetAttribute("ShopIndex") == index) and 0 or 1
+		end
+	end
+end
+
+local function updateShopSelection()
+	local item = shopCatalog[selectedShopIndex]
+	if not item then
+		return
+	end
+	title.Text = item.name .. ((item.price and item.price > 0) and ("  $" .. item.price) or "")
+	descriptionLabel.Text = item.description
+	buyButton.Text = (item.action == "Sell") and "出售" or "購買 / 使用"
+	setPreviewVisible(selectedShopIndex)
+end
+
+local function focusShopCamera()
+	local camera = Workspace.CurrentCamera
+	local shopWorld = getShopWorld()
+	local anchor = shopWorld and shopWorld:FindFirstChild("ShopCameraAnchor")
+	if not camera or not anchor then
+		return
+	end
+	previousCameraType = camera.CameraType
+	previousCameraSubject = camera.CameraSubject
+	previousCameraCFrame = camera.CFrame
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = anchor.CFrame
+end
+
+local function restoreCamera()
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return
+	end
+	camera.CameraType = previousCameraType or Enum.CameraType.Custom
+	camera.CameraSubject = previousCameraSubject
+	if previousCameraCFrame then
+		camera.CFrame = previousCameraCFrame
+	end
+end
+
+local function openShop()
+	shopFrame.Visible = true
+	focusShopCamera()
+	updateShopSelection()
+end
+
+closeShop = function()
+	shopFrame.Visible = false
+	restoreCamera()
+end
+
+previousButton.MouseButton1Click:Connect(function()
+	selectedShopIndex = ((selectedShopIndex - 2) % #shopCatalog) + 1
+	updateShopSelection()
+end)
+
+nextButton.MouseButton1Click:Connect(function()
+	selectedShopIndex = (selectedShopIndex % #shopCatalog) + 1
+	updateShopSelection()
+end)
+
+buyButton.MouseButton1Click:Connect(function()
+	local item = shopCatalog[selectedShopIndex]
+	if item then
+		shopActionEvent:FireServer(item.id)
+	end
+end)
+
+updateShopSelection()
 
 local progressFrame = Instance.new("Frame")
 progressFrame.Name = "MiningProgress"
@@ -126,16 +225,8 @@ local function hookShopPrompt(prompt)
 	if prompt.Name == "OpenShopPrompt" then
 		prompt.Triggered:Connect(function(triggeringPlayer)
 			if triggeringPlayer == player then
-				shopFrame.Visible = true
+				openShop()
 			end
-		end)
-	elseif prompt.Name == "ShopItemPrompt" then
-		prompt.Triggered:Connect(function(triggeringPlayer)
-			if triggeringPlayer ~= player then
-				return
-			end
-			local display = prompt.Parent
-			shopActionEvent:FireServer(display:GetAttribute("ShopAction"), display:GetAttribute("ShopItem"))
 		end)
 	end
 end
