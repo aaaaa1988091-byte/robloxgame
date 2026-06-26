@@ -57,11 +57,19 @@ local TOOL_EFFICIENCY = {
 	["木鎬"] = 20,
 	["鐵鎬"] = 50,
 	["鑽石鎬"] = 100,
+	["鐵鑽頭"] = 35,
+	["鑽石鑽頭"] = 80,
+}
+
+local TOOL_AUTO_MINE = {
+	["鐵鑽頭"] = true,
+	["鑽石鑽頭"] = true,
 }
 
 
-local PICKAXE_NAMES = { "木鎬", "鐵鎬", "鑽石鎬" }
+local PICKAXE_NAMES = { "木鎬", "鐵鎬", "鑽石鎬", "鐵鑽頭", "鑽石鑽頭" }
 local BOMB_TOOL_NAME = "💣 炸彈"
+local CLUSTER_BOMB_TOOL_NAME = "💥 集束炸彈"
 local playerMiningState = {}
 
 local function teleportPlayerToSteel(player)
@@ -130,6 +138,24 @@ local SHOP_CATALOG = {
 		model = { kind = "pickaxe", color = Color3.fromRGB(45, 210, 235), material = Enum.Material.Neon },
 	},
 	{
+		id = "iron_drill",
+		name = "鐵鑽頭",
+		description = "自動工具：按住即可連續挖掘，工具強度 35 / 秒。",
+		action = "BuyTool",
+		item = "鐵鑽頭",
+		price = 3000,
+		model = { kind = "pickaxe", color = Color3.fromRGB(140, 150, 160), material = Enum.Material.Metal },
+	},
+	{
+		id = "diamond_drill",
+		name = "鑽石鑽頭",
+		description = "高級自動工具：按住即可連續挖掘，工具強度 80 / 秒。",
+		action = "BuyTool",
+		item = "鑽石鑽頭",
+		price = 9000,
+		model = { kind = "pickaxe", color = Color3.fromRGB(65, 240, 255), material = Enum.Material.Neon },
+	},
+	{
 		id = "bomb",
 		name = "炸彈",
 		description = "可無限重複購買。投擲後以拋物線飛出並爆炸。",
@@ -137,6 +163,15 @@ local SHOP_CATALOG = {
 		item = "",
 		price = 50,
 		model = { kind = "bomb", color = Color3.fromRGB(25, 25, 25), material = Enum.Material.Slate },
+	},
+	{
+		id = "cluster_bomb",
+		name = "集束炸彈",
+		description = "高級炸彈：價格為普通炸彈 3 倍，可堆疊，爆炸範圍更大。",
+		action = "BuyBomb",
+		item = "ClusterBombCount",
+		price = 150,
+		model = { kind = "bomb", color = Color3.fromRGB(120, 30, 30), material = Enum.Material.Metal },
 	},
 	{
 		id = "backpack_upgrade",
@@ -190,63 +225,100 @@ local function giveTool(player, toolName)
 
 	local tool = Instance.new("Tool")
 	tool.Name = toolName
-	tool.RequiresHandle = true
+	tool:SetAttribute("Strength", TOOL_EFFICIENCY[toolName] or 1)
+	tool:SetAttribute("AutoMine", TOOL_AUTO_MINE[toolName] == true)
 
-	local handle = Instance.new("Part")
-	handle.Name = "Handle"
-	handle.Size = Vector3.new(0.4, 3, 0.4)
-	handle.Material = Enum.Material.Wood
-	handle.Color = Color3.fromRGB(125, 78, 38)
-	handle.Parent = tool
+	if toolName == "拳頭" then
+		tool.RequiresHandle = false
+	else
+		tool.RequiresHandle = true
+		local handle = Instance.new("Part")
+		handle.Name = "Handle"
+		handle.Size = Vector3.new(0.4, 3, 0.4)
+		handle.Material = Enum.Material.Wood
+		handle.Color = Color3.fromRGB(125, 78, 38)
+		handle.Parent = tool
 
-	local head = Instance.new("Part")
-	head.Name = "PickaxeHead"
-	head.Size = Vector3.new(2, 0.35, 0.35)
-	head.Material = (toolName == "鐵鎬") and Enum.Material.Metal or ((toolName == "鑽石鎬") and Enum.Material.Neon or Enum.Material.Wood)
-	head.Color = (toolName == "鐵鎬") and Color3.fromRGB(180, 185, 190) or ((toolName == "鑽石鎬") and Color3.fromRGB(45, 210, 235) or Color3.fromRGB(126, 78, 36))
-	head.CFrame = handle.CFrame * CFrame.new(0, 1.35, 0)
-	head.Parent = tool
+		local head = Instance.new("Part")
+		head.Name = "ToolHead"
+		head.Size = TOOL_AUTO_MINE[toolName] and Vector3.new(1.2, 1.2, 1.2) or Vector3.new(2, 0.35, 0.35)
+		head.Material = (toolName == "鐵鎬" or toolName == "鐵鑽頭") and Enum.Material.Metal or ((toolName == "鑽石鎬" or toolName == "鑽石鑽頭") and Enum.Material.Neon or Enum.Material.Wood)
+		head.Color = (toolName == "鐵鎬" or toolName == "鐵鑽頭") and Color3.fromRGB(180, 185, 190) or ((toolName == "鑽石鎬" or toolName == "鑽石鑽頭") and Color3.fromRGB(45, 210, 235) or Color3.fromRGB(126, 78, 36))
+		head.Shape = TOOL_AUTO_MINE[toolName] and Enum.PartType.Ball or Enum.PartType.Block
+		head.CFrame = handle.CFrame * CFrame.new(0, 1.35, 0)
+		head.Parent = tool
 
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = handle
-	weld.Part1 = head
-	weld.Parent = handle
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = handle
+		weld.Part1 = head
+		weld.Parent = handle
+	end
+
 	tool.Parent = backpack
-
 	local clone = tool:Clone()
 	clone.Parent = starterGear
 	rememberTool(player, toolName)
 	return true
 end
 
-local function giveBombTool(player)
+local function getBombCountValue(player, countName)
+	local value = player:FindFirstChild(countName)
+	if not value then
+		value = Instance.new("IntValue")
+		value.Name = countName
+		value.Value = 0
+		value.Parent = player
+	end
+	return value
+end
+
+local function updateBombTool(player, countName, toolBaseName, radius)
 	local backpack = player:WaitForChild("Backpack")
-	local tool = Instance.new("Tool")
-	tool.Name = BOMB_TOOL_NAME
-	tool.RequiresHandle = true
-
-	local handle = Instance.new("Part")
-	handle.Name = "Handle"
-	handle.Shape = Enum.PartType.Ball
-	handle.Size = Vector3.new(1.6, 1.6, 1.6)
-	handle.Material = Enum.Material.Slate
-	handle.Color = Color3.fromRGB(25, 25, 25)
-	handle.Parent = tool
-
-	local fuse = Instance.new("Part")
-	fuse.Name = "Fuse"
-	fuse.Size = Vector3.new(0.18, 0.7, 0.18)
-	fuse.Material = Enum.Material.Wood
-	fuse.Color = Color3.fromRGB(120, 70, 30)
-	fuse.CFrame = handle.CFrame * CFrame.new(0, 0.9, 0)
-	fuse.Parent = tool
-
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = handle
-	weld.Part1 = fuse
-	weld.Parent = handle
-	tool.Parent = backpack
+	local character = player.Character
+	local countValue = getBombCountValue(player, countName)
+	local tool = nil
+	for _, container in ipairs({ backpack, character }) do
+		if container then
+			for _, child in ipairs(container:GetChildren()) do
+				if child:IsA("Tool") and child:GetAttribute("BombCountName") == countName then
+					tool = child
+					break
+				end
+			end
+		end
+		if tool then
+			break
+		end
+	end
+	if countValue.Value <= 0 then
+		if tool then
+			tool:Destroy()
+		end
+		return nil
+	end
+	if not tool then
+		tool = Instance.new("Tool")
+		tool.Name = toolBaseName
+		tool.RequiresHandle = true
+		tool:SetAttribute("BombCountName", countName)
+		tool:SetAttribute("BombBaseName", toolBaseName)
+		tool:SetAttribute("BombRadius", radius)
+		local handle = Instance.new("Part")
+		handle.Name = "Handle"
+		handle.Shape = Enum.PartType.Ball
+		handle.Size = Vector3.new(1.6, 1.6, 1.6)
+		handle.Material = (radius > 1) and Enum.Material.Metal or Enum.Material.Slate
+		handle.Color = (radius > 1) and Color3.fromRGB(120, 30, 30) or Color3.fromRGB(25, 25, 25)
+		handle.Parent = tool
+		tool.Parent = backpack
+	end
+	tool.Name = toolBaseName .. " *" .. countValue.Value
 	return tool
+end
+
+local function refreshBombTools(player)
+	updateBombTool(player, "BombCount", BOMB_TOOL_NAME, 1)
+	updateBombTool(player, "ClusterBombCount", CLUSTER_BOMB_TOOL_NAME, 2)
 end
 
 local function giveStoredWeapons(player)
@@ -257,12 +329,7 @@ local function giveStoredWeapons(player)
 			giveTool(player, toolName)
 		end
 	end
-	local bombCount = player:FindFirstChild("BombCount")
-	if bombCount then
-		for _ = 1, bombCount.Value do
-			giveBombTool(player)
-		end
-	end
+	refreshBombTools(player)
 end
 
 Players.PlayerAdded:Connect(function(player)
@@ -295,6 +362,11 @@ Players.PlayerAdded:Connect(function(player)
 	bombCount.Value = 0
 	bombCount.Parent = player
 
+	local clusterBombCount = Instance.new("IntValue")
+	clusterBombCount.Name = "ClusterBombCount"
+	clusterBombCount.Value = 0
+	clusterBombCount.Parent = player
+
 	local ownedTools = getOwnedToolsFolder(player)
 	local success, savedData = pcall(function()
 		return PLAYER_DATA_STORE:GetAsync(player.UserId)
@@ -303,6 +375,7 @@ Players.PlayerAdded:Connect(function(player)
 		money.Value = tonumber(savedData.Coins) or 0
 		currentPickaxe.Value = savedData.CurrentPickaxe or "拳頭"
 		bombCount.Value = tonumber(savedData.BombCount) or 0
+		clusterBombCount.Value = tonumber(savedData.ClusterBombCount) or 0
 		maxSand.Value = tonumber(savedData.MaxSand) or MAX_BACKPACK_CAPPED
 		for _, toolName in ipairs(savedData.OwnedTools or {}) do
 			rememberTool(player, toolName)
@@ -322,9 +395,10 @@ local function savePlayerData(player)
 	local leaderstats = player:FindFirstChild("leaderstats")
 	local currentPickaxe = player:FindFirstChild("CurrentPickaxe")
 	local bombCount = player:FindFirstChild("BombCount")
+	local clusterBombCount = player:FindFirstChild("ClusterBombCount")
 	local ownedTools = player:FindFirstChild("OwnedTools")
 	local maxSand = player:FindFirstChild("MaxSand")
-	if not leaderstats or not currentPickaxe or not bombCount or not ownedTools or not maxSand then
+	if not leaderstats or not currentPickaxe or not bombCount or not clusterBombCount or not ownedTools or not maxSand then
 		return
 	end
 	local toolList = {}
@@ -336,6 +410,7 @@ local function savePlayerData(player)
 			Coins = leaderstats.Coins.Value,
 			CurrentPickaxe = currentPickaxe.Value,
 			BombCount = bombCount.Value,
+			ClusterBombCount = clusterBombCount.Value,
 			MaxSand = maxSand.Value,
 			OwnedTools = toolList,
 		})
@@ -533,7 +608,8 @@ teleportEvent.OnServerEvent:Connect(function(player)
 end)
 
 -- 炸彈爆炸邏輯
-local function triggerExplosion(player, centerPos)
+local function triggerExplosion(player, centerPos, radius)
+	radius = radius or 1
 	local lstats = player:FindFirstChild("leaderstats")
 	local maxSandVal = player:FindFirstChild("MaxSand")
 	if not lstats or not maxSandVal then
@@ -547,9 +623,9 @@ local function triggerExplosion(player, centerPos)
 	local earnedSand = 0
 	local earnedCoins = 0
 
-	for x = -1, 1 do
-		for y = -1, 1 do
-			for z = -1, 1 do
+	for x = -radius, radius do
+		for y = -radius, radius do
+			for z = -radius, radius do
 				local bx, by, bz = cx + x, cy + y, cz + z
 				local key = bx .. "_" .. by .. "_" .. bz
 				local blockType = worldData[key]
@@ -619,13 +695,14 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 			sendNotification(player, "交易失敗", "金幣不足，或已擁有該等級工具。")
 		end
 	elseif action == "BuyBomb" then
-		local bombCount = player:FindFirstChild("BombCount")
+		local countName = (item ~= "" and item) or "BombCount"
+		local bombCount = getBombCountValue(player, countName)
 		local price = catalogPrice or 50
 		if coins.Value >= price and bombCount then
 			coins.Value -= price
 			bombCount.Value += 1
-			giveBombTool(player)
-			sendNotification(player, "購買成功", "獲得一枚隨身炸彈！炸彈可重複購買。")
+			refreshBombTools(player)
+			sendNotification(player, "購買成功", "炸彈已堆疊到背包：" .. bombCount.Value)
 		else
 			sendNotification(player, "交易失敗", "金幣不足。")
 		end
@@ -723,12 +800,17 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	end
 
 	local currentTool = player.Character and player.Character:FindFirstChildOfClass("Tool")
-	if currentTool and currentTool.Name == BOMB_TOOL_NAME then
-		local bombCount = player:FindFirstChild("BombCount")
-		if bombCount then
-			bombCount.Value = math.max(0, bombCount.Value - 1)
+	local bombCountName = currentTool and currentTool:GetAttribute("BombCountName")
+	if currentTool and bombCountName then
+		local bombCount = getBombCountValue(player, bombCountName)
+		bombCount.Value = math.max(0, bombCount.Value - 1)
+		local bombRadius = currentTool:GetAttribute("BombRadius") or 1
+		local bombBaseName = currentTool:GetAttribute("BombBaseName") or BOMB_TOOL_NAME
+		if bombCount.Value <= 0 then
+			currentTool:Destroy()
+		else
+			currentTool.Name = bombBaseName .. " *" .. bombCount.Value
 		end
-		currentTool:Destroy()
 
 		local char = player.Character
 		local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -756,7 +838,7 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 				projectile.Position = flatPosition + Vector3.new(0, arcOffset, 0)
 				task.wait(flightTime / steps)
 			end
-			triggerExplosion(player, targetPosition)
+			triggerExplosion(player, targetPosition, bombRadius)
 			projectile:Destroy()
 		end)
 		return
@@ -764,8 +846,7 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 
 	local lstats = player:FindFirstChild("leaderstats")
 	local maxSand = player:FindFirstChild("MaxSand")
-	local currentPickaxe = player:FindFirstChild("CurrentPickaxe")
-	if not lstats or not maxSand or not currentPickaxe then
+	if not lstats or not maxSand then
 		return
 	end
 
@@ -792,7 +873,8 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	local previousTime = playerMiningState[stateKey] or (now - 0.2)
 	local elapsed = math.clamp(now - previousTime, 0.05, 0.35)
 	playerMiningState[stateKey] = now
-	local power = TOOL_EFFICIENCY[currentPickaxe.Value] or TOOL_EFFICIENCY["拳頭"]
+	local equippedTool = player.Character and player.Character:FindFirstChildOfClass("Tool")
+	local power = (equippedTool and equippedTool:GetAttribute("Strength")) or 1
 	blockHealthData[key] -= power * elapsed
 
 	miningEvent:FireClient(player, targetPart, blockHealthData[key], maxHealth)
@@ -838,7 +920,11 @@ end
 task.spawn(function()
 	while true do
 		nextWorldRefreshTimeValue.Value = os.time() + WORLD_REFRESH_SECONDS
-		task.wait(WORLD_REFRESH_SECONDS)
+		task.wait(math.max(0, WORLD_REFRESH_SECONDS - 5))
+		for _, player in ipairs(Players:GetPlayers()) do
+			sendNotification(player, "世界即將刷新", "5 秒後重置礦區，請注意安全！")
+		end
+		task.wait(5)
 		refreshWorld()
 	end
 end)

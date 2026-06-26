@@ -20,6 +20,13 @@ gui.Name = "MiningHud"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
+local function addCorner(instance, radius)
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, radius or 10)
+	corner.Parent = instance
+	return corner
+end
+
 local function makeButton(name, text, size, position, parent)
 	local button = Instance.new("TextButton")
 	button.Name = name
@@ -30,6 +37,9 @@ local function makeButton(name, text, size, position, parent)
 	button.TextColor3 = Color3.fromRGB(255, 255, 255)
 	button.TextScaled = true
 	button.Parent = parent
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = button
 	return button
 end
 
@@ -48,6 +58,7 @@ infoLabel.TextColor3 = Color3.fromRGB(255, 245, 210)
 infoLabel.TextWrapped = true
 infoLabel.TextScaled = true
 infoLabel.Parent = gui
+addCorner(infoLabel, 12)
 
 local fullBackpackButton = makeButton("FullBackpackReturnButton", "背包已滿！返回商城", UDim2.fromOffset(260, 58), UDim2.new(0.5, -130, 0.52, 0), gui)
 fullBackpackButton.BackgroundColor3 = Color3.fromRGB(170, 80, 35)
@@ -63,6 +74,7 @@ shopFrame.Position = UDim2.new(0.5, -190, 1, -260)
 shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 shopFrame.Visible = false
 shopFrame.Parent = gui
+addCorner(shopFrame, 16)
 
 local title = Instance.new("TextLabel")
 title.Name = "Title"
@@ -86,6 +98,7 @@ end)
 
 local shopCatalog = shopCatalogFunction:InvokeServer()
 local selectedShopIndex = 1
+local suppressShopOpenUntil = os.clock() + 5
 local previousCameraType = nil
 local previousCameraSubject = nil
 local previousCameraCFrame = nil
@@ -165,6 +178,7 @@ descriptionLabel.TextColor3 = Color3.fromRGB(255, 235, 190)
 descriptionLabel.TextWrapped = true
 descriptionLabel.TextScaled = true
 descriptionLabel.Parent = shopFrame
+addCorner(descriptionLabel, 12)
 
 local previousButton = makeButton("PreviousItem", "◀ 上一個", UDim2.fromOffset(110, 42), UDim2.fromOffset(16, 150), shopFrame)
 previousButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
@@ -225,6 +239,9 @@ local function restoreCamera()
 end
 
 local function openShop()
+	if os.clock() < suppressShopOpenUntil then
+		return
+	end
 	shopFrame.Visible = true
 	focusShopCamera()
 	updateShopSelection()
@@ -261,12 +278,36 @@ progressFrame.Position = UDim2.new(0.5, -110, 0.72, 0)
 progressFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 progressFrame.Visible = false
 progressFrame.Parent = gui
+addCorner(progressFrame, 8)
 
 local progressBar = Instance.new("Frame")
 progressBar.Name = "Bar"
 progressBar.Size = UDim2.fromScale(1, 1)
 progressBar.BackgroundColor3 = Color3.fromRGB(252, 203, 96)
 progressBar.Parent = progressFrame
+addCorner(progressBar, 8)
+
+local blockProgressBillboard = Instance.new("BillboardGui")
+blockProgressBillboard.Name = "BlockMiningProgress"
+blockProgressBillboard.Size = UDim2.fromOffset(120, 14)
+blockProgressBillboard.StudsOffset = Vector3.new(0, 3, 0)
+blockProgressBillboard.AlwaysOnTop = true
+blockProgressBillboard.Enabled = false
+blockProgressBillboard.Parent = gui
+
+local blockProgressBack = Instance.new("Frame")
+blockProgressBack.Name = "Back"
+blockProgressBack.Size = UDim2.fromScale(1, 1)
+blockProgressBack.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+blockProgressBack.Parent = blockProgressBillboard
+addCorner(blockProgressBack, 6)
+
+local blockProgressBar = Instance.new("Frame")
+blockProgressBar.Name = "Bar"
+blockProgressBar.Size = UDim2.fromScale(1, 1)
+blockProgressBar.BackgroundColor3 = Color3.fromRGB(255, 210, 90)
+blockProgressBar.Parent = blockProgressBack
+addCorner(blockProgressBar, 6)
 
 local selectionBox = Instance.new("SelectionBox")
 selectionBox.Name = "TargetBlockHighlight"
@@ -298,6 +339,16 @@ sendNotificationEvent.OnClientEvent:Connect(function(titleText, message)
 	})
 end)
 
+player.CharacterAdded:Connect(function()
+	suppressShopOpenUntil = os.clock() + 5
+	closeShop()
+end)
+
+nextWorldRefreshTimeValue.Changed:Connect(function()
+	suppressShopOpenUntil = os.clock() + 6
+	closeShop()
+end)
+
 local function isInsideShopZone()
 	local shopWorld = getShopWorld()
 	local zone = shopWorld and shopWorld:FindFirstChild("ShopOpenZone")
@@ -327,12 +378,14 @@ end)
 local function updateInfoPanel()
 	local leaderstats = player:FindFirstChild("leaderstats")
 	local sand = leaderstats and leaderstats:FindFirstChild("Sand")
+	local coins = leaderstats and leaderstats:FindFirstChild("Coins")
 	local maxSand = player:FindFirstChild("MaxSand")
 	local remaining = math.max(0, nextWorldRefreshTimeValue.Value - os.time())
 	local minutes = math.floor(remaining / 60)
 	local seconds = remaining % 60
 	local sandText = sand and maxSand and (sand.Value .. "/" .. maxSand.Value) or "載入中"
-	infoLabel.Text = string.format("世界刷新：%02d:%02d\n背包：%s", minutes, seconds, sandText)
+	local coinText = coins and coins.Value or 0
+	infoLabel.Text = string.format("金錢：$%s  背包：%s\n世界刷新：%02d:%02d", coinText, sandText, minutes, seconds)
 	fullBackpackButton.Visible = sand and maxSand and sand.Value >= maxSand.Value
 end
 
@@ -369,18 +422,28 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		isMining = true
-		task.spawn(function()
-			while isMining do
-				local target = getMineableTarget()
-				updateHighlight(target)
-				if target then
-					miningEvent:FireServer(target)
-					task.spawn(playMiningSwing)
+		local character = player.Character
+		local tool = character and character:FindFirstChildOfClass("Tool")
+		local target = getMineableTarget()
+		updateHighlight(target)
+		if target then
+			miningEvent:FireServer(target)
+			task.spawn(playMiningSwing)
+		end
+		if tool and tool:GetAttribute("AutoMine") then
+			isMining = true
+			task.spawn(function()
+				while isMining do
+					local autoTarget = getMineableTarget()
+					updateHighlight(autoTarget)
+					if autoTarget then
+						miningEvent:FireServer(autoTarget)
+						task.spawn(playMiningSwing)
+					end
+					task.wait(0.2)
 				end
-				task.wait(0.2)
-			end
-		end)
+			end)
+		end
 	end
 end)
 
@@ -390,12 +453,16 @@ UserInputService.InputEnded:Connect(function(input)
 	end
 end)
 
-miningEvent.OnClientEvent:Connect(function(_targetPart, currentHealth, maxHealth)
+miningEvent.OnClientEvent:Connect(function(targetPart, currentHealth, maxHealth)
 	if currentHealth <= 0 or maxHealth <= 0 then
 		progressFrame.Visible = false
+		blockProgressBillboard.Enabled = false
 		return
 	end
 	local percentRemaining = math.clamp(currentHealth / maxHealth, 0, 1)
 	progressBar.Size = UDim2.fromScale(percentRemaining, 1)
 	progressFrame.Visible = true
+	blockProgressBillboard.Adornee = targetPart
+	blockProgressBar.Size = UDim2.fromScale(percentRemaining, 1)
+	blockProgressBillboard.Enabled = true
 end)
