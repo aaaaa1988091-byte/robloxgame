@@ -108,45 +108,80 @@ local function createShopWorld()
 	shopModel.Name = "MiningShopWorld"
 	shopModel.Parent = Workspace
 
-	-- 剛體固體地面精準齊平 Y = 0
+	-- 與 4x4x4 方塊高度貼合：地板中心在 -2，表面正好是 Y = 0。
 	local secureFloor = shopModel:FindFirstChild("SecureFloor") or Instance.new("Part")
 	secureFloor.Name = "SecureFloor"
-	secureFloor.Size = Vector3.new(40, 4, 40)
-	secureFloor.Position = Vector3.new(0, -2, -25)
-	secureFloor.Material = Enum.Material.Concrete
-	secureFloor.Color = Color3.fromRGB(80, 85, 90)
+	secureFloor.Size = Vector3.new(44, BLOCK_SIZE, 44)
+	secureFloor.Position = Vector3.new(0, -BLOCK_SIZE / 2, -25)
+	secureFloor.Material = Enum.Material.Sand
+	secureFloor.Color = Color3.fromRGB(236, 205, 150)
 	secureFloor.Anchored = true
 	secureFloor.CanCollide = true
 	secureFloor.Parent = shopModel
 
-	-- 藍色地墊
-	local pad = shopModel:FindFirstChild("ShopPad") or Instance.new("Part")
-	pad.Name = "ShopPad"
-	pad.Size = Vector3.new(12, 0.2, 12)
-	pad.Position = SHOP_POSITION + Vector3.new(0, 0.1, 0)
-	pad.BrickColor = BrickColor.new("Bright blue")
-	pad.Anchored = true
-	pad.Parent = shopModel
+	local deck = shopModel:FindFirstChild("WoodDeck") or Instance.new("Part")
+	deck.Name = "WoodDeck"
+	deck.Size = Vector3.new(18, 0.4, 16)
+	deck.Position = SHOP_POSITION + Vector3.new(0, 0.2, -2)
+	deck.Material = Enum.Material.WoodPlanks
+	deck.Color = Color3.fromRGB(139, 92, 50)
+	deck.Anchored = true
+	deck.Parent = shopModel
 
-	-- 商店實體（自動販賣機）
-	local shopVending = shopModel:FindFirstChild("ShopVendingMachine") or Instance.new("Part")
-	shopVending.Name = "ShopVendingMachine"
-	shopVending.Size = Vector3.new(4, 7, 3)
-	shopVending.Position = SHOP_POSITION + Vector3.new(0, 3.5, -4)
-	shopVending.Material = Enum.Material.SmoothPlastic
-	shopVending.Color = Color3.fromRGB(40, 40, 45)
-	shopVending.Anchored = true
-	shopVending.Parent = shopModel
+	local roof = shopModel:FindFirstChild("ShedRoof") or Instance.new("Part")
+	roof.Name = "ShedRoof"
+	roof.Size = Vector3.new(20, 1, 18)
+	roof.Position = SHOP_POSITION + Vector3.new(0, 8, -2)
+	roof.Material = Enum.Material.WoodPlanks
+	roof.Color = Color3.fromRGB(96, 57, 28)
+	roof.Anchored = true
+	roof.Parent = shopModel
 
-	local neonPanel = shopModel:FindFirstChild("NeonPanel") or Instance.new("Part")
-	neonPanel.Name = "NeonPanel"
-	neonPanel.Size = Vector3.new(3, 5, 0.2)
-	neonPanel.Position = shopVending.Position + Vector3.new(0, 0, 1.4)
-	neonPanel.Material = Enum.Material.Neon
-	neonPanel.Color = Color3.fromRGB(0, 255, 128)
-	neonPanel.Anchored = true
-	neonPanel.CanCollide = false
-	neonPanel.Parent = shopModel
+	local postOffsets = {
+		Vector3.new(-8, 4, -9),
+		Vector3.new(8, 4, -9),
+		Vector3.new(-8, 4, 5),
+		Vector3.new(8, 4, 5),
+	}
+	for index, offset in ipairs(postOffsets) do
+		local post = shopModel:FindFirstChild("ShedPost" .. index) or Instance.new("Part")
+		post.Name = "ShedPost" .. index
+		post.Size = Vector3.new(1, 8, 1)
+		post.Position = SHOP_POSITION + offset
+		post.Material = Enum.Material.Wood
+		post.Color = Color3.fromRGB(105, 68, 36)
+		post.Anchored = true
+		post.Parent = shopModel
+	end
+
+	-- 商店櫃台（可互動）
+	local shopCounter = shopModel:FindFirstChild("ShopCounter") or Instance.new("Part")
+	shopCounter.Name = "ShopCounter"
+	shopCounter.Size = Vector3.new(8, 3, 2)
+	shopCounter.Position = SHOP_POSITION + Vector3.new(0, 1.5, -7)
+	shopCounter.Material = Enum.Material.WoodPlanks
+	shopCounter.Color = Color3.fromRGB(157, 107, 63)
+	shopCounter.Anchored = true
+	shopCounter.Parent = shopModel
+
+	local sign = shopModel:FindFirstChild("ShopSign") or Instance.new("Part")
+	sign.Name = "ShopSign"
+	sign.Size = Vector3.new(10, 2, 0.4)
+	sign.Position = SHOP_POSITION + Vector3.new(0, 6, -7.3)
+	sign.Material = Enum.Material.WoodPlanks
+	sign.Color = Color3.fromRGB(118, 74, 34)
+	sign.Anchored = true
+	sign.Parent = shopModel
+
+	local prompt = shopCounter:FindFirstChild("OpenShopPrompt") or Instance.new("ProximityPrompt")
+	prompt.Name = "OpenShopPrompt"
+	prompt.ActionText = "打開商店"
+	prompt.ObjectText = "礦工棚子"
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = shopCounter
 end
 createShopWorld()
 
