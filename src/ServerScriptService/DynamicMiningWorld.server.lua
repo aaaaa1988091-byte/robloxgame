@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
 
 -- ==================== 參數設定 ====================
 local BLOCK_SIZE = 4
@@ -9,6 +10,8 @@ local CHUNK_RADIUS_Y = 4
 local MAX_DEPTH_BLOCKS = 4000
 local CHEST_CHANCE = 0.02
 local MAX_BACKPACK_CAPPED = 20
+local WORLD_REFRESH_SECONDS = 10 * 60
+local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlayerDataV2")
 
 local SHOP_POSITION = Vector3.new(0, 0, -25)
 
@@ -42,11 +45,44 @@ end
 
 -- ==================== 1. 玩家數據與工具系統 ====================
 local TOOL_EFFICIENCY = {
-	["拳頭"] = 1,
-	["木鎬"] = 2,
-	["鐵鎬"] = 4,
-	["鑽石鎬"] = 8,
+	["拳頭"] = 5,
+	["木鎬"] = 20,
+	["鐵鎬"] = 50,
+	["鑽石鎬"] = 100,
 }
+
+
+local PICKAXE_NAMES = { "木鎬", "鐵鎬", "鑽石鎬" }
+local BOMB_TOOL_NAME = "💣 炸彈"
+local playerMiningState = {}
+
+local function teleportPlayerToSteel(player)
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root then
+		root.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 7, 0))
+	end
+end
+
+local function getOwnedToolsFolder(player)
+	local folderValue = player:FindFirstChild("OwnedTools")
+	if not folderValue then
+		folderValue = Instance.new("Folder")
+		folderValue.Name = "OwnedTools"
+		folderValue.Parent = player
+	end
+	return folderValue
+end
+
+local function rememberTool(player, toolName)
+	local ownedTools = getOwnedToolsFolder(player)
+	if not ownedTools:FindFirstChild(toolName) then
+		local value = Instance.new("BoolValue")
+		value.Name = toolName
+		value.Value = true
+		value.Parent = ownedTools
+	end
+end
 
 local TOOL_PRICES = {
 	["木鎬"] = 150,
@@ -68,7 +104,33 @@ local function giveTool(player, toolName)
 
 	local clone = tool:Clone()
 	clone.Parent = starterGear
+	rememberTool(player, toolName)
 	return true
+end
+
+local function giveBombTool(player)
+	local backpack = player:WaitForChild("Backpack")
+	local tool = Instance.new("Tool")
+	tool.Name = BOMB_TOOL_NAME
+	tool.RequiresHandle = false
+	tool.Parent = backpack
+	return tool
+end
+
+local function giveStoredWeapons(player)
+	giveTool(player, "拳頭")
+	local ownedTools = getOwnedToolsFolder(player)
+	for _, toolName in ipairs(PICKAXE_NAMES) do
+		if ownedTools:FindFirstChild(toolName) then
+			giveTool(player, toolName)
+		end
+	end
+	local bombCount = player:FindFirstChild("BombCount")
+	if bombCount then
+		for _ = 1, bombCount.Value do
+			giveBombTool(player)
+		end
+	end
 end
 
 Players.PlayerAdded:Connect(function(player)
@@ -96,10 +158,64 @@ Players.PlayerAdded:Connect(function(player)
 	currentPickaxe.Value = "拳頭"
 	currentPickaxe.Parent = player
 
+	local bombCount = Instance.new("IntValue")
+	bombCount.Name = "BombCount"
+	bombCount.Value = 0
+	bombCount.Parent = player
+
+	local ownedTools = getOwnedToolsFolder(player)
+	local success, savedData = pcall(function()
+		return PLAYER_DATA_STORE:GetAsync(player.UserId)
+	end)
+	if success and type(savedData) == "table" then
+		money.Value = tonumber(savedData.Coins) or 0
+		currentPickaxe.Value = savedData.CurrentPickaxe or "拳頭"
+		bombCount.Value = tonumber(savedData.BombCount) or 0
+		for _, toolName in ipairs(savedData.OwnedTools or {}) do
+			rememberTool(player, toolName)
+		end
+	elseif not success then
+		sendNotification(player, "資料讀取失敗", "暫時使用本局資料，離線前會再嘗試保存。")
+	end
+
 	player.CharacterAdded:Connect(function()
 		task.wait(0.5)
-		giveTool(player, "拳頭")
+		giveStoredWeapons(player)
+		teleportPlayerToSteel(player)
 	end)
+end)
+
+local function savePlayerData(player)
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local currentPickaxe = player:FindFirstChild("CurrentPickaxe")
+	local bombCount = player:FindFirstChild("BombCount")
+	local ownedTools = player:FindFirstChild("OwnedTools")
+	if not leaderstats or not currentPickaxe or not bombCount or not ownedTools then
+		return
+	end
+	local toolList = {}
+	for _, value in ipairs(ownedTools:GetChildren()) do
+		table.insert(toolList, value.Name)
+	end
+	pcall(function()
+		PLAYER_DATA_STORE:SetAsync(player.UserId, {
+			Coins = leaderstats.Coins.Value,
+			CurrentPickaxe = currentPickaxe.Value,
+			BombCount = bombCount.Value,
+			OwnedTools = toolList,
+		})
+	end)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	savePlayerData(player)
+	playerMiningState[player] = nil
+end)
+
+game:BindToClose(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		savePlayerData(player)
+	end
 end)
 
 -- ==================== 2. 建立齊平場地與實體商店 ====================
@@ -113,8 +229,8 @@ local function createShopWorld()
 	secureFloor.Name = "SecureFloor"
 	secureFloor.Size = Vector3.new(44, BLOCK_SIZE, 44)
 	secureFloor.Position = Vector3.new(0, -BLOCK_SIZE / 2, -25)
-	secureFloor.Material = Enum.Material.Sand
-	secureFloor.Color = Color3.fromRGB(236, 205, 150)
+	secureFloor.Material = Enum.Material.Metal
+	secureFloor.Color = Color3.fromRGB(125, 135, 145)
 	secureFloor.Anchored = true
 	secureFloor.CanCollide = true
 	secureFloor.Parent = shopModel
@@ -128,12 +244,12 @@ local function createShopWorld()
 	deck.Anchored = true
 	deck.Parent = shopModel
 
-	local roof = shopModel:FindFirstChild("ShedRoof") or Instance.new("Part")
-	roof.Name = "ShedRoof"
-	roof.Size = Vector3.new(20, 1, 18)
+	local roof = shopModel:FindFirstChild("CanvasCanopy") or Instance.new("Part")
+	roof.Name = "CanvasCanopy"
+	roof.Size = Vector3.new(22, 0.6, 18)
 	roof.Position = SHOP_POSITION + Vector3.new(0, 8, -2)
-	roof.Material = Enum.Material.WoodPlanks
-	roof.Color = Color3.fromRGB(96, 57, 28)
+	roof.Material = Enum.Material.Fabric
+	roof.Color = Color3.fromRGB(205, 60, 45)
 	roof.Anchored = true
 	roof.Parent = shopModel
 
@@ -182,6 +298,55 @@ local function createShopWorld()
 	prompt.MaxActivationDistance = 12
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = shopCounter
+
+	local shopItems = {
+		{ name = "SellSandDisplay", label = "出售沙子", action = "Sell", item = "", offset = Vector3.new(-8, 2.2, -2), color = Color3.fromRGB(235, 205, 130), size = Vector3.new(2.5, 2.5, 2.5), material = Enum.Material.Sand },
+		{ name = "WoodPickaxeDisplay", label = "木鎬 $150", action = "BuyTool", item = "木鎬", offset = Vector3.new(-4, 2.2, -2), color = Color3.fromRGB(126, 78, 36), size = Vector3.new(0.7, 4, 0.7), material = Enum.Material.Wood },
+		{ name = "IronPickaxeDisplay", label = "鐵鎬 $500", action = "BuyTool", item = "鐵鎬", offset = Vector3.new(0, 2.2, -2), color = Color3.fromRGB(180, 185, 190), size = Vector3.new(0.7, 4, 0.7), material = Enum.Material.Metal },
+		{ name = "DiamondPickaxeDisplay", label = "鑽石鎬 $1500", action = "BuyTool", item = "鑽石鎬", offset = Vector3.new(4, 2.2, -2), color = Color3.fromRGB(45, 210, 235), size = Vector3.new(0.7, 4, 0.7), material = Enum.Material.Neon },
+		{ name = "BombDisplay", label = "炸彈 $50", action = "BuyBomb", item = "", offset = Vector3.new(8, 2.2, -2), color = Color3.fromRGB(25, 25, 25), size = Vector3.new(2.2, 2.2, 2.2), material = Enum.Material.Slate },
+	}
+
+	for _, itemData in ipairs(shopItems) do
+		local display = shopModel:FindFirstChild(itemData.name) or Instance.new("Part")
+		display.Name = itemData.name
+		display.Size = itemData.size
+		display.Position = SHOP_POSITION + itemData.offset
+		display.Material = itemData.material
+		display.Color = itemData.color
+		display.Anchored = true
+		display.Shape = (itemData.name == "BombDisplay") and Enum.PartType.Ball or Enum.PartType.Block
+		display:SetAttribute("ShopAction", itemData.action)
+		display:SetAttribute("ShopItem", itemData.item)
+		display.Parent = shopModel
+
+		local displayPrompt = display:FindFirstChild("ShopItemPrompt") or Instance.new("ProximityPrompt")
+		displayPrompt.Name = "ShopItemPrompt"
+		displayPrompt.ActionText = itemData.label
+		displayPrompt.ObjectText = "3D 商品展示"
+		displayPrompt.KeyboardKeyCode = Enum.KeyCode.E
+		displayPrompt.HoldDuration = 0
+		displayPrompt.MaxActivationDistance = 10
+		displayPrompt.RequiresLineOfSight = false
+		displayPrompt.Parent = display
+
+		local priceTag = display:FindFirstChild("PriceTag") or Instance.new("BillboardGui")
+		priceTag.Name = "PriceTag"
+		priceTag.Size = UDim2.fromOffset(120, 36)
+		priceTag.StudsOffset = Vector3.new(0, 2.5, 0)
+		priceTag.AlwaysOnTop = true
+		priceTag.Parent = display
+
+		local label = priceTag:FindFirstChild("Label") or Instance.new("TextLabel")
+		label.Name = "Label"
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundTransparency = 0.25
+		label.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
+		label.TextColor3 = Color3.fromRGB(255, 235, 190)
+		label.TextScaled = true
+		label.Text = itemData.label
+		label.Parent = priceTag
+	end
 end
 createShopWorld()
 
@@ -190,7 +355,7 @@ teleportEvent.OnServerEvent:Connect(function(player)
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if root then
-		root.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 3, 0))
+		root.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 7, 0))
 	end
 end)
 
@@ -273,11 +438,14 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 			sendNotification(player, "交易失敗", "金幣不足，或已擁有該等級工具。")
 		end
 	elseif action == "BuyBomb" then
-		if coins.Value >= 50 and giveTool(player, "💣 炸彈") then
+		local bombCount = player:FindFirstChild("BombCount")
+		if coins.Value >= 50 and bombCount then
 			coins.Value -= 50
-			sendNotification(player, "購買成功", "獲得一枚隨身炸彈！")
+			bombCount.Value += 1
+			giveBombTool(player)
+			sendNotification(player, "購買成功", "獲得一枚隨身炸彈！炸彈可重複購買。")
 		else
-			sendNotification(player, "交易失敗", "金幣不足，或已擁有炸彈。")
+			sendNotification(player, "交易失敗", "金幣不足。")
 		end
 	end
 end)
@@ -360,7 +528,11 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	end
 
 	local currentTool = player.Character and player.Character:FindFirstChildOfClass("Tool")
-	if currentTool and currentTool.Name == "💣 炸彈" then
+	if currentTool and currentTool.Name == BOMB_TOOL_NAME then
+		local bombCount = player:FindFirstChild("BombCount")
+		if bombCount then
+			bombCount.Value = math.max(0, bombCount.Value - 1)
+		end
 		currentTool:Destroy()
 		local bVisual = Instance.new("Part")
 		bVisual.Size = Vector3.new(2, 2, 2)
@@ -403,12 +575,16 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		return
 	end
 
-	local depthPercent = math.clamp(math.abs(by) / MAX_DEPTH_BLOCKS, 0, 1)
-	local maxHealth = math.floor(1 + (depthPercent * 19))
+	local maxHealth = math.abs(by) + 10
 	blockHealthData[key] = blockHealthData[key] or maxHealth
 
-	local power = TOOL_EFFICIENCY[currentPickaxe.Value] or 1
-	blockHealthData[key] -= power
+	local stateKey = player.UserId .. ":" .. key
+	local now = os.clock()
+	local previousTime = playerMiningState[stateKey] or (now - 0.2)
+	local elapsed = math.clamp(now - previousTime, 0.05, 0.35)
+	playerMiningState[stateKey] = now
+	local power = TOOL_EFFICIENCY[currentPickaxe.Value] or TOOL_EFFICIENCY["拳頭"]
+	blockHealthData[key] -= power * elapsed
 
 	miningEvent:FireClient(player, targetPart, blockHealthData[key], maxHealth)
 
@@ -429,6 +605,31 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		end
 
 		revealNeighbors(bx, by, bz)
+	end
+end)
+
+local function refreshWorld()
+	for _, blockModel in ipairs(folder:GetChildren()) do
+		blockModel:Destroy()
+	end
+	table.clear(worldData)
+	table.clear(spawnedParts)
+	table.clear(blockHealthData)
+	table.clear(playerMiningState)
+	for _, player in ipairs(Players:GetPlayers()) do
+		local sand = player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Sand")
+		if sand then
+			sand.Value = 0
+		end
+		teleportPlayerToSteel(player)
+		sendNotification(player, "世界刷新", "礦區已重置，所有玩家已回到鋼體平台。")
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(WORLD_REFRESH_SECONDS)
+		refreshWorld()
 	end
 end)
 

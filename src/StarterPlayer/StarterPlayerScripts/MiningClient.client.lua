@@ -89,6 +89,28 @@ progressBar.Size = UDim2.fromScale(1, 1)
 progressBar.BackgroundColor3 = Color3.fromRGB(252, 203, 96)
 progressBar.Parent = progressFrame
 
+local selectionBox = Instance.new("SelectionBox")
+selectionBox.Name = "TargetBlockHighlight"
+selectionBox.Color3 = Color3.fromRGB(255, 245, 120)
+selectionBox.LineThickness = 0.05
+selectionBox.SurfaceTransparency = 1
+selectionBox.Parent = gui
+
+local isMining = false
+
+local function getMineableTarget()
+	local target = mouse.Target
+	local miningFolder = Workspace:FindFirstChild("DynamicMiningWorld")
+	if target and miningFolder and target:IsDescendantOf(miningFolder) then
+		return target
+	end
+	return nil
+end
+
+local function updateHighlight(target)
+	selectionBox.Adornee = target
+end
+
 sendNotificationEvent.OnClientEvent:Connect(function(titleText, message)
 	StarterGui:SetCore("SendNotification", {
 		Title = titleText,
@@ -98,11 +120,22 @@ sendNotificationEvent.OnClientEvent:Connect(function(titleText, message)
 end)
 
 local function hookShopPrompt(prompt)
-	if prompt:IsA("ProximityPrompt") and prompt.Name == "OpenShopPrompt" then
+	if not prompt:IsA("ProximityPrompt") then
+		return
+	end
+	if prompt.Name == "OpenShopPrompt" then
 		prompt.Triggered:Connect(function(triggeringPlayer)
 			if triggeringPlayer == player then
 				shopFrame.Visible = true
 			end
+		end)
+	elseif prompt.Name == "ShopItemPrompt" then
+		prompt.Triggered:Connect(function(triggeringPlayer)
+			if triggeringPlayer ~= player then
+				return
+			end
+			local display = prompt.Parent
+			shopActionEvent:FireServer(display:GetAttribute("ShopAction"), display:GetAttribute("ShopItem"))
 		end)
 	end
 end
@@ -112,16 +145,32 @@ for _, descendant in ipairs(Workspace:GetDescendants()) do
 end
 Workspace.DescendantAdded:Connect(hookShopPrompt)
 
+mouse.Move:Connect(function()
+	updateHighlight(getMineableTarget())
+end)
+
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then
 		return
 	end
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		local target = mouse.Target
-		local miningFolder = Workspace:FindFirstChild("DynamicMiningWorld")
-		if target and miningFolder and target:IsDescendantOf(miningFolder) then
-			miningEvent:FireServer(target)
-		end
+		isMining = true
+		task.spawn(function()
+			while isMining do
+				local target = getMineableTarget()
+				updateHighlight(target)
+				if target then
+					miningEvent:FireServer(target)
+				end
+				task.wait(0.2)
+			end
+		end)
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		isMining = false
 	end
 end)
 
