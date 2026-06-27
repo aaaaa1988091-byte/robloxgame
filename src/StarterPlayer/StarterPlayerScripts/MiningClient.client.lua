@@ -12,6 +12,7 @@ local sendNotificationEvent = ReplicatedStorage:WaitForChild("SendNotification")
 local teleportEvent = ReplicatedStorage:WaitForChild("TeleportToShop")
 local shopActionEvent = ReplicatedStorage:WaitForChild("ShopAction")
 local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
+local rewardEmojiEvent = ReplicatedStorage:WaitForChild("RewardEmojiEvent")
 local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
 local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefreshTime")
 
@@ -300,22 +301,9 @@ end)
 
 updateShopSelection()
 
-local progressFrame, progressFrameCreated = getOrCreateChild(gui, "Frame", "MiningProgress")
-if progressFrameCreated then
-progressFrame.Size = UDim2.fromOffset(220, 20)
-progressFrame.Position = UDim2.new(0.5, -110, 0.72, 0)
-progressFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-progressFrame.Visible = false
-progressFrame.Parent = gui
-addCorner(progressFrame, 8)
-end
-
-local progressBar, progressBarCreated = getOrCreateChild(progressFrame, "Frame", "Bar")
-if progressBarCreated then
-progressBar.Size = UDim2.fromScale(1, 1)
-progressBar.BackgroundColor3 = Color3.fromRGB(252, 203, 96)
-progressBar.Parent = progressFrame
-addCorner(progressBar, 8)
+local oldPlayerProgress = gui:FindFirstChild("MiningProgress")
+if oldPlayerProgress then
+	oldPlayerProgress:Destroy()
 end
 
 local activeSurfaceProgress = nil
@@ -568,14 +556,37 @@ UserInputService.InputEnded:Connect(function(input)
 	end
 end)
 
+rewardEmojiEvent.OnClientEvent:Connect(function(emoji, amount)
+	local rewardLabel = Instance.new("TextLabel")
+	rewardLabel.Name = "RewardEmojiFly"
+	rewardLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+	rewardLabel.Position = UDim2.fromScale(0.5, 0.55)
+	rewardLabel.Size = UDim2.fromOffset(150, 52)
+	rewardLabel.BackgroundTransparency = 1
+	rewardLabel.Text = string.format("%s +%s", emoji or "🪙", amount or 0)
+	rewardLabel.TextScaled = true
+	rewardLabel.TextColor3 = Color3.fromRGB(255, 230, 90)
+	rewardLabel.TextStrokeTransparency = 0.25
+	rewardLabel.Parent = gui
+
+	local targetX = infoLabel.AbsolutePosition.X + infoLabel.AbsoluteSize.X * 0.45
+	local targetY = infoLabel.AbsolutePosition.Y + infoLabel.AbsoluteSize.Y * 0.35
+	local tween = game:GetService("TweenService"):Create(rewardLabel, TweenInfo.new(0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+		Position = UDim2.fromOffset(targetX, targetY),
+		TextTransparency = 1,
+		TextStrokeTransparency = 1,
+	})
+	tween:Play()
+	tween.Completed:Connect(function()
+		rewardLabel:Destroy()
+	end)
+end)
+
 miningEvent.OnClientEvent:Connect(function(targetPart, currentHealth, maxHealth)
 	if currentHealth <= 0 or maxHealth <= 0 then
-		progressFrame.Visible = false
 		clearSurfaceProgress()
 		return
 	end
 	local percentRemaining = math.clamp(currentHealth / maxHealth, 0, 1)
-	progressBar.Size = UDim2.fromScale(percentRemaining, 1)
-	progressFrame.Visible = true
 	showSurfaceProgress(targetPart, percentRemaining)
 end)

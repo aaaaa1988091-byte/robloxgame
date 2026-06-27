@@ -7,10 +7,14 @@ local DataStoreService = game:GetService("DataStoreService")
 
 -- ==================== 參數設定 ====================
 local BLOCK_SIZE = 4
-local CHUNK_RADIUS_XZ = 6
-local CHUNK_RADIUS_Y = 4
+local CHUNK_RADIUS_XZ = 14
+local CHUNK_RADIUS_Y = 8
 local MAX_DEPTH_BLOCKS = 4000
 local CHEST_CHANCE = 0.02
+local STEEL_FLOOR_SIZE = Vector3.new(10, 1, 10)
+local NOISE_SCALE = 0.075
+local HILL_HEIGHT_BLOCKS = 5
+local CACTUS_CHANCE = 0.025
 local MAX_BACKPACK_CAPPED = 20
 local BACKPACK_UPGRADE_AMOUNT = 20
 local WORLD_REFRESH_SECONDS = 10 * 60
@@ -19,6 +23,14 @@ local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlaye
 local SHOP_POSITION = Vector3.new(0, 0, -25)
 local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
 local BOMB_THROW_FLIGHT_TIME = 0.42
+
+-- 寶箱可維護設定：新增等級只要複製一列，調整 id / minDepth / weight / color / health / reward。
+-- 視覺模型共用 ServerStorage.BOX，只依等級套用不同顏色。
+local CHEST_LEVELS = {
+	{ id = "common", minDepth = 0, weight = 70, color = Color3.fromRGB(180, 130, 65), health = 18, reward = { 50, 180 }, emoji = "🪙" },
+	{ id = "rare", minDepth = 35, weight = 24, color = Color3.fromRGB(70, 150, 255), health = 42, reward = { 180, 520 }, emoji = "💎" },
+	{ id = "epic", minDepth = 120, weight = 6, color = Color3.fromRGB(190, 80, 255), health = 90, reward = { 520, 1400 }, emoji = "👑" },
+}
 
 local function getSteelFloor()
 	local shopModel = Workspace:FindFirstChild("MiningShopWorld")
@@ -34,12 +46,13 @@ local function getWorldOrigin()
 end
 
 local function worldFromBlock(bx, by, bz)
-	return getWorldOrigin() + Vector3.new(bx * BLOCK_SIZE, by * BLOCK_SIZE, bz * BLOCK_SIZE)
+	-- by = 0 的方塊頂面剛好貼齊鋼體平台頂面。
+	return getWorldOrigin() + Vector3.new(bx * BLOCK_SIZE, by * BLOCK_SIZE - BLOCK_SIZE / 2, bz * BLOCK_SIZE)
 end
 
 local function blockFromWorld(position)
 	local relative = position - getWorldOrigin()
-	return math.floor((relative.X + BLOCK_SIZE / 2) / BLOCK_SIZE), math.floor((relative.Y + BLOCK_SIZE / 2) / BLOCK_SIZE), math.floor((relative.Z + BLOCK_SIZE / 2) / BLOCK_SIZE)
+	return math.floor((relative.X + BLOCK_SIZE / 2) / BLOCK_SIZE), math.floor((relative.Y + BLOCK_SIZE) / BLOCK_SIZE), math.floor((relative.Z + BLOCK_SIZE / 2) / BLOCK_SIZE)
 end
 
 local folder = Workspace:FindFirstChild("DynamicMiningWorld") or Instance.new("Folder")
@@ -65,6 +78,7 @@ local sendNotificationEvent = getRemote("RemoteEvent", "SendNotification")
 local teleportEvent = getRemote("RemoteEvent", "TeleportToShop")
 local shopActionEvent = getRemote("RemoteEvent", "ShopAction")
 local miningEvent = getRemote("RemoteEvent", "MiningEvent")
+local rewardEmojiEvent = getRemote("RemoteEvent", "RewardEmojiEvent")
 local shopCatalogFunction = getRemote("RemoteFunction", "GetShopCatalog")
 
 local nextWorldRefreshTimeValue = ReplicatedStorage:FindFirstChild("NextWorldRefreshTime") or Instance.new("IntValue")
@@ -607,23 +621,9 @@ local function ensureStarterGuiTemplate()
 		corner.Parent = description
 	end
 
-	local progressFrame, progressCreated = getOrCreateChild(gui, "Frame", "MiningProgress")
-	if progressCreated then
-		progressFrame.Size = UDim2.fromOffset(220, 20)
-		progressFrame.Position = UDim2.new(0.5, -110, 0.72, 0)
-		progressFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-		progressFrame.Visible = false
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 8)
-		corner.Parent = progressFrame
-	end
-	local progressBar, barCreated = getOrCreateChild(progressFrame, "Frame", "Bar")
-	if barCreated then
-		progressBar.Size = UDim2.fromScale(1, 1)
-		progressBar.BackgroundColor3 = Color3.fromRGB(252, 203, 96)
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 8)
-		corner.Parent = progressBar
+	local oldProgress = gui:FindFirstChild("MiningProgress")
+	if oldProgress then
+		oldProgress:Destroy()
 	end
 end
 ensureStarterGuiTemplate()
@@ -635,15 +635,18 @@ local function createShopWorld()
 	shopModel.Parent = Workspace
 
 	-- 與 4x4x4 方塊高度貼合：地板中心在 -2，表面正好是 Y = 0。
-	local secureFloor = shopModel:FindFirstChild("SecureFloor") or Instance.new("Part")
-	secureFloor.Name = "SecureFloor"
-	secureFloor.Size = Vector3.new(44, BLOCK_SIZE, 44)
-	secureFloor.Position = Vector3.new(0, -BLOCK_SIZE / 2, -25)
-	secureFloor.Material = Enum.Material.Metal
-	secureFloor.Color = Color3.fromRGB(125, 135, 145)
-	secureFloor.Anchored = true
-	secureFloor.CanCollide = true
-	secureFloor.Parent = shopModel
+	local secureFloor = shopModel:FindFirstChild("SecureFloor")
+	if not secureFloor then
+		secureFloor = Instance.new("Part")
+		secureFloor.Name = "SecureFloor"
+		secureFloor.Size = STEEL_FLOOR_SIZE
+		secureFloor.Position = Vector3.new(0, -STEEL_FLOOR_SIZE.Y / 2, -25)
+		secureFloor.Material = Enum.Material.Metal
+		secureFloor.Color = Color3.fromRGB(125, 135, 145)
+		secureFloor.Anchored = true
+		secureFloor.CanCollide = true
+		secureFloor.Parent = shopModel
+	end
 
 	local deck = shopModel:FindFirstChild("WoodDeck") or Instance.new("Part")
 	deck.Name = "WoodDeck"
@@ -785,6 +788,19 @@ teleportEvent.OnServerEvent:Connect(function(player)
 	end
 end)
 
+local function isChestBlock(blockType)
+	return type(blockType) == "table" and blockType.kind == "Chest"
+end
+
+local function getChestLevel(levelId)
+	for _, level in ipairs(CHEST_LEVELS) do
+		if level.id == levelId then
+			return level
+		end
+	end
+	return CHEST_LEVELS[1]
+end
+
 -- 炸彈爆炸邏輯
 local function triggerExplosion(player, centerPos, radius)
 	radius = radius or 1
@@ -813,8 +829,9 @@ local function triggerExplosion(player, centerPos, radius)
 						spawnedParts[key] = nil
 					end
 					blockHealthData[key] = nil
-					if blockType == 1 then
-						earnedCoins += math.random(50, 200)
+					if isChestBlock(blockType) then
+						local level = getChestLevel(blockType.level)
+						earnedCoins += math.random(level.reward[1], level.reward[2])
 					elseif lstats.Sand.Value + earnedSand < maxSandVal.Value then
 						earnedSand += 1
 					end
@@ -826,6 +843,7 @@ local function triggerExplosion(player, centerPos, radius)
 	lstats.Sand.Value = math.clamp(lstats.Sand.Value + earnedSand, 0, maxSandVal.Value)
 	if earnedCoins > 0 then
 		lstats.Coins.Value += earnedCoins
+		rewardEmojiEvent:FireClient(player, "💥", earnedCoins)
 	end
 	sendNotification(player, "炸彈爆炸", "成功轟炸！收集了 " .. earnedSand .. " 顆沙子。")
 end
@@ -899,22 +917,69 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 end)
 
 -- ==================== 3. 核心大世界生成機制 ====================
+local function getSurfaceHeight(bx, bz)
+	local broad = math.noise(bx * NOISE_SCALE, bz * NOISE_SCALE, 0) * HILL_HEIGHT_BLOCKS
+	local detail = math.noise(bx * NOISE_SCALE * 2.7, bz * NOISE_SCALE * 2.7, 31) * 1.5
+	return math.max(0, math.floor(broad + detail))
+end
+
+local function getChestLevelForDepth(depth)
+	local available = {}
+	local totalWeight = 0
+	for _, level in ipairs(CHEST_LEVELS) do
+		if depth >= level.minDepth then
+			table.insert(available, level)
+			totalWeight += level.weight
+		end
+	end
+	local roll = math.random() * totalWeight
+	for _, level in ipairs(available) do
+		roll -= level.weight
+		if roll <= 0 then
+			return level
+		end
+	end
+	return available[1] or CHEST_LEVELS[1]
+end
+
+local function isInShopSafeZone(bx, by, bz)
+	local steelFloor = getSteelFloor()
+	local halfX = math.max(0, ((steelFloor and steelFloor.Size.X) or STEEL_FLOOR_SIZE.X) / 2 - BLOCK_SIZE / 2)
+	local halfZ = math.max(0, ((steelFloor and steelFloor.Size.Z) or STEEL_FLOOR_SIZE.Z) / 2 - BLOCK_SIZE / 2)
+	local relativeToSteel = Vector3.new(bx * BLOCK_SIZE, by * BLOCK_SIZE, bz * BLOCK_SIZE)
+	return relativeToSteel.X >= -halfX and relativeToSteel.X <= halfX and relativeToSteel.Z >= -halfZ and relativeToSteel.Z <= halfZ and by >= -2
+end
+
 local function getBlockData(bx, by, bz)
-	if by > 0 or by < -MAX_DEPTH_BLOCKS then
+	if by < -MAX_DEPTH_BLOCKS then
 		return false
 	end
 
-	-- 精準控制安全區，不生成方塊避免卡住商店。
-	local relativeToSteel = Vector3.new(bx * BLOCK_SIZE, by * BLOCK_SIZE, bz * BLOCK_SIZE)
-	if relativeToSteel.X >= -20 and relativeToSteel.X <= 20 and relativeToSteel.Z >= -15 and relativeToSteel.Z <= 15 and by >= -2 then
+	if isInShopSafeZone(bx, by, bz) then
+		return false
+	end
+
+	local surfaceHeight = getSurfaceHeight(bx, bz)
+	if by > surfaceHeight then
 		return false
 	end
 
 	local key = bx .. "_" .. by .. "_" .. bz
 	if worldData[key] == nil then
-		worldData[key] = (math.random() < CHEST_CHANCE) and 1 or true
+		local depth = math.max(0, -by)
+		if by <= 0 and math.random() < CHEST_CHANCE then
+			local level = getChestLevelForDepth(depth)
+			worldData[key] = { kind = "Chest", level = level.id }
+		else
+			worldData[key] = true
+		end
 	end
 	return worldData[key]
+end
+
+local function shouldSpawnCactus(bx, bz)
+	local cactusNoise = math.noise(bx * 0.19, bz * 0.19, 83)
+	return cactusNoise > 0.38 and math.random() < CACTUS_CHANCE
 end
 
 local function isBlockExposed(bx, by, bz)
@@ -938,22 +1003,69 @@ local function instanceBlock(bx, by, bz)
 		return
 	end
 
+	local chest = isChestBlock(blockType)
+	local chestLevel = chest and getChestLevel(blockType.level) or nil
 	local blockModel = Instance.new("Model")
-	blockModel.Name = (blockType == 1) and "ChestBlock" or "SandBlock"
+	blockModel.Name = chest and "ChestBlock" or "SandBlock"
 	blockModel.Parent = folder
 
-	local part = Instance.new("Part")
-	part.Name = "Block"
-	part.Size = Vector3.new(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
-	part.Position = worldFromBlock(bx, by, bz)
-	part.Anchored = true
-	part.Material = (blockType == 1) and Enum.Material.WoodPlanks or Enum.Material.Sand
-	part.Parent = blockModel
+	local part
+	if chest and ServerStorage:FindFirstChild("BOX") then
+		local boxTemplate = ServerStorage:FindFirstChild("BOX")
+		local boxClone = boxTemplate:Clone()
+		boxClone.Name = "Block"
+		boxClone.Parent = blockModel
+		if boxClone:IsA("Model") then
+			part = boxClone.PrimaryPart or boxClone:FindFirstChildWhichIsA("BasePart", true)
+			if part then
+				boxClone.PrimaryPart = part
+				boxClone:PivotTo(CFrame.new(worldFromBlock(bx, by, bz)))
+			end
+		elseif boxClone:IsA("BasePart") then
+			part = boxClone
+			part.Position = worldFromBlock(bx, by, bz)
+		end
+	else
+		part = Instance.new("Part")
+		part.Name = "Block"
+		part.Size = Vector3.new(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
+		part.Position = worldFromBlock(bx, by, bz)
+		part.Material = chest and Enum.Material.WoodPlanks or Enum.Material.Sand
+		part.Parent = blockModel
+	end
+
+	if not part then
+		blockModel:Destroy()
+		return
+	end
+	for _, descendant in ipairs(blockModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = true
+			descendant:SetAttribute("BlockKey", key)
+			if chest and chestLevel then
+				descendant.Color = chestLevel.color
+			end
+		end
+	end
 	blockModel.PrimaryPart = part
+	part:SetAttribute("BlockKey", key)
 
 	local depthPercent = math.clamp(math.abs(by) / MAX_DEPTH_BLOCKS, 0, 1)
-	part.Color = (blockType == 1) and Color3.fromRGB(150, 100, 50)
-		or Color3.fromRGB(240, 200, 140):Lerp(Color3.fromRGB(40, 30, 20), depthPercent)
+	if not chest then
+		part.Color = Color3.fromRGB(240, 200, 140):Lerp(Color3.fromRGB(40, 30, 20), depthPercent)
+	end
+
+	if by == getSurfaceHeight(bx, bz) and shouldSpawnCactus(bx, bz) then
+		local cactus = Instance.new("Part")
+		cactus.Name = "Cactus"
+		cactus.Size = Vector3.new(1.1, math.random(2, 4) * 2, 1.1)
+		cactus.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + cactus.Size.Y / 2, 0)
+		cactus.Material = Enum.Material.Grass
+		cactus.Color = Color3.fromRGB(35, 135, 55)
+		cactus.Anchored = true
+		cactus.Parent = blockModel
+	end
 
 	spawnedParts[key] = blockModel
 end
@@ -1025,20 +1137,25 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		return
 	end
 
-	if lstats.Sand.Value >= maxSand.Value and targetPart.Parent.Name ~= "ChestBlock" then
-		sendNotification(player, "背包已滿", "請使用左側【一鍵回城】清空背包！")
-		return
-	end
-
 	local bx, by, bz = blockFromWorld(targetPart.Position)
-	local key = bx .. "_" .. by .. "_" .. bz
+	local key = targetPart:GetAttribute("BlockKey") or (bx .. "_" .. by .. "_" .. bz)
+	if targetPart:GetAttribute("BlockKey") then
+		local parsedX, parsedY, parsedZ = string.match(key, "^(-?%d+)_(-?%d+)_(-?%d+)$")
+		bx, by, bz = tonumber(parsedX) or bx, tonumber(parsedY) or by, tonumber(parsedZ) or bz
+	end
 
 	local blockType = worldData[key]
 	if not blockType then
 		return
 	end
 
-	local maxHealth = math.abs(by) + 10
+	if lstats.Sand.Value >= maxSand.Value and not isChestBlock(blockType) then
+		sendNotification(player, "背包已滿", "請使用左側【一鍵回城】清空背包！")
+		return
+	end
+
+	local chestLevel = isChestBlock(blockType) and getChestLevel(blockType.level) or nil
+	local maxHealth = chestLevel and chestLevel.health or (math.abs(by) + 10)
 	blockHealthData[key] = blockHealthData[key] or maxHealth
 
 	local stateKey = player.UserId .. ":" .. key
@@ -1082,9 +1199,12 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		end
 		miningEvent:FireClient(player, targetPart, 0, maxHealth)
 
-		if blockType == 1 then
-			lstats.Coins.Value += math.random(50, 200)
-			sendNotification(player, "發現寶藏", "砸開寶箱，獲得金幣！")
+		if isChestBlock(blockType) then
+			local level = getChestLevel(blockType.level)
+			local reward = math.random(level.reward[1], level.reward[2])
+			lstats.Coins.Value += reward
+			rewardEmojiEvent:FireClient(player, level.emoji or "🪙", reward)
+			sendNotification(player, "發現寶藏", "砸開 " .. level.id .. " 寶箱，獲得 " .. reward .. " 金幣！")
 		else
 			lstats.Sand.Value = math.clamp(lstats.Sand.Value + 1, 0, maxSand.Value)
 		end
@@ -1128,6 +1248,11 @@ local function updateWorldForPlayer(player)
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if not root then
+		return
+	end
+
+	if root.Position.Y < getWorldOrigin().Y - 180 then
+		root.CFrame = CFrame.new(getWorldOrigin() + Vector3.new(0, 8, 0))
 		return
 	end
 
