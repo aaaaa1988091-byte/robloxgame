@@ -3,6 +3,8 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 local StarterGui = game:GetService("StarterGui")
+local Debris = game:GetService("Debris")
+local TweenService = game:GetService("TweenService")
 local DataStoreService = game:GetService("DataStoreService")
 
 -- ==================== 參數設定 ====================
@@ -15,6 +17,8 @@ local STEEL_FLOOR_SIZE = Vector3.new(10, 1, 10)
 local NOISE_SCALE = 0.075
 local HILL_HEIGHT_BLOCKS = 5
 local CACTUS_CHANCE = 0.025
+local CACTUS_HEIGHT_SCALE = 2.2
+local MINING_DEBRIS_COUNT = 18
 local MAX_BACKPACK_CAPPED = 20
 local BACKPACK_UPGRADE_AMOUNT = 20
 local WORLD_REFRESH_SECONDS = 10 * 60
@@ -34,7 +38,8 @@ local CHEST_LEVELS = {
 
 local function getSteelFloor()
 	local shopModel = Workspace:FindFirstChild("MiningShopWorld")
-	return shopModel and shopModel:FindFirstChild("SecureFloor")
+	local steelFloor = shopModel and shopModel:FindFirstChild("SecureFloor", true)
+	return steelFloor or Workspace:FindFirstChild("SecureFloor", true)
 end
 
 local function getWorldOrigin()
@@ -139,6 +144,49 @@ local function rememberTool(player, toolName)
 	end
 end
 
+local ITEM_STORAGE_FOLDER_NAME = "MiningItemModels"
+local DEFAULT_CATALOG_IDS = {
+	sell_sand = true,
+	wood_pickaxe = true,
+	iron_pickaxe = true,
+	diamond_pickaxe = true,
+	iron_drill = true,
+	diamond_drill = true,
+	bomb = true,
+	cluster_bomb = true,
+	backpack_upgrade = true,
+}
+
+local function getItemStorageFolder()
+	local folder = ServerStorage:FindFirstChild(ITEM_STORAGE_FOLDER_NAME)
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = ITEM_STORAGE_FOLDER_NAME
+		folder.Parent = ServerStorage
+	end
+	return folder
+end
+
+local function readCatalogItemFromStorage(child)
+	if child:GetAttribute("ShopItem") == false or (DEFAULT_CATALOG_IDS[child.Name] and not child:GetAttribute("ShopItem")) then
+		return nil
+	end
+	local itemId = child:GetAttribute("Id") or child.Name
+	return {
+		id = itemId,
+		name = child:GetAttribute("DisplayName") or child.Name,
+		description = child:GetAttribute("Description") or "ServerStorage.MiningItemModels 內新增的商品。",
+		action = child:GetAttribute("Action") or "BuyTool",
+		item = child:GetAttribute("Item") or child.Name,
+		price = child:GetAttribute("Price") or 0,
+		model = {
+			kind = child:GetAttribute("PreviewKind") or "block",
+			color = child:GetAttribute("PreviewColor") or Color3.fromRGB(235, 205, 130),
+			material = Enum.Material[child:GetAttribute("PreviewMaterial") or "Sand"],
+		},
+	}
+end
+
 local SHOP_CATALOG = {
 	{
 		id = "sell_sand",
@@ -230,8 +278,10 @@ for _, catalogItem in ipairs(SHOP_CATALOG) do
 	end
 end
 
+local getRuntimeShopCatalog
+
 local function getCatalogItemById(itemId)
-	for _, catalogItem in ipairs(SHOP_CATALOG) do
+	for _, catalogItem in ipairs(getRuntimeShopCatalog()) do
 		if catalogItem.id == itemId then
 			return catalogItem
 		end
@@ -239,9 +289,20 @@ local function getCatalogItemById(itemId)
 	return nil
 end
 
+function getRuntimeShopCatalog()
+	local catalog = table.clone(SHOP_CATALOG)
+	for _, child in ipairs(getItemStorageFolder():GetChildren()) do
+		local storageItem = readCatalogItemFromStorage(child)
+		if storageItem then
+			table.insert(catalog, storageItem)
+		end
+	end
+	return catalog
+end
+
 shopCatalogFunction.OnServerInvoke = function()
 	local serializableCatalog = {}
-	for _, catalogItem in ipairs(SHOP_CATALOG) do
+	for _, catalogItem in ipairs(getRuntimeShopCatalog()) do
 		table.insert(serializableCatalog, {
 			id = catalogItem.id,
 			name = catalogItem.name,
@@ -630,41 +691,48 @@ ensureStarterGuiTemplate()
 
 -- ==================== 2. 建立齊平場地與實體商店 ====================
 local function createShopWorld()
-	local shopModel = Workspace:FindFirstChild("MiningShopWorld") or Instance.new("Model")
-	shopModel.Name = "MiningShopWorld"
-	shopModel.Parent = Workspace
+	local shopModel = Workspace:FindFirstChild("MiningShopWorld")
+	if not shopModel then
+		shopModel = Instance.new("Model")
+		shopModel.Name = "MiningShopWorld"
+		shopModel.Parent = Workspace
+	end
 
-	-- 與 4x4x4 方塊高度貼合：地板中心在 -2，表面正好是 Y = 0。
-	local secureFloor = shopModel:FindFirstChild("SecureFloor")
-	if not secureFloor then
-		secureFloor = Instance.new("Part")
-		secureFloor.Name = "SecureFloor"
+	local function createPartIfMissing(name, configure)
+		local part = shopModel:FindFirstChild(name, true) or Workspace:FindFirstChild(name, true)
+		if not part then
+			part = Instance.new("Part")
+			part.Name = name
+			part.Parent = shopModel
+			configure(part)
+		end
+		return part
+	end
+
+	createPartIfMissing("SecureFloor", function(secureFloor)
 		secureFloor.Size = STEEL_FLOOR_SIZE
 		secureFloor.Position = Vector3.new(0, -STEEL_FLOOR_SIZE.Y / 2, -25)
 		secureFloor.Material = Enum.Material.Metal
 		secureFloor.Color = Color3.fromRGB(125, 135, 145)
 		secureFloor.Anchored = true
 		secureFloor.CanCollide = true
-		secureFloor.Parent = shopModel
-	end
+	end)
 
-	local deck = shopModel:FindFirstChild("WoodDeck") or Instance.new("Part")
-	deck.Name = "WoodDeck"
-	deck.Size = Vector3.new(18, 0.4, 16)
-	deck.Position = SHOP_POSITION + Vector3.new(0, 0.2, -2)
-	deck.Material = Enum.Material.WoodPlanks
-	deck.Color = Color3.fromRGB(139, 92, 50)
-	deck.Anchored = true
-	deck.Parent = shopModel
+	createPartIfMissing("WoodDeck", function(deck)
+		deck.Size = Vector3.new(18, 0.4, 16)
+		deck.Position = SHOP_POSITION + Vector3.new(0, 0.2, -2)
+		deck.Material = Enum.Material.WoodPlanks
+		deck.Color = Color3.fromRGB(139, 92, 50)
+		deck.Anchored = true
+	end)
 
-	local roof = shopModel:FindFirstChild("CanvasCanopy") or Instance.new("Part")
-	roof.Name = "CanvasCanopy"
-	roof.Size = Vector3.new(22, 0.6, 18)
-	roof.Position = SHOP_POSITION + Vector3.new(0, 8, -2)
-	roof.Material = Enum.Material.Fabric
-	roof.Color = Color3.fromRGB(205, 60, 45)
-	roof.Anchored = true
-	roof.Parent = shopModel
+	createPartIfMissing("CanvasCanopy", function(roof)
+		roof.Size = Vector3.new(22, 0.6, 18)
+		roof.Position = SHOP_POSITION + Vector3.new(0, 8, -2)
+		roof.Material = Enum.Material.Fabric
+		roof.Color = Color3.fromRGB(205, 60, 45)
+		roof.Anchored = true
+	end)
 
 	local postOffsets = {
 		Vector3.new(-8, 4, -9),
@@ -673,64 +741,57 @@ local function createShopWorld()
 		Vector3.new(8, 4, 5),
 	}
 	for index, offset in ipairs(postOffsets) do
-		local post = shopModel:FindFirstChild("ShedPost" .. index) or Instance.new("Part")
-		post.Name = "ShedPost" .. index
-		post.Size = Vector3.new(1, 8, 1)
-		post.Position = SHOP_POSITION + offset
-		post.Material = Enum.Material.Wood
-		post.Color = Color3.fromRGB(105, 68, 36)
-		post.Anchored = true
-		post.Parent = shopModel
+		createPartIfMissing("ShedPost" .. index, function(post)
+			post.Size = Vector3.new(1, 8, 1)
+			post.Position = SHOP_POSITION + offset
+			post.Material = Enum.Material.Wood
+			post.Color = Color3.fromRGB(105, 68, 36)
+			post.Anchored = true
+		end)
 	end
 
-	-- 商店入口區：玩家踩進半透明圓圈會在客戶端自動開店，離開自動關閉。
-	local shopZone = shopModel:FindFirstChild("ShopOpenZone") or Instance.new("Part")
-	shopZone.Name = "ShopOpenZone"
-	shopZone.Shape = Enum.PartType.Cylinder
-	shopZone.Size = Vector3.new(0.25, 18, 18)
-	shopZone.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 0.08, 0)) * CFrame.Angles(0, 0, math.rad(90))
-	shopZone.Material = Enum.Material.Neon
-	shopZone.Color = Color3.fromRGB(80, 210, 255)
-	shopZone.Transparency = 0.55
-	shopZone.Anchored = true
-	shopZone.CanCollide = false
-	shopZone.Parent = shopModel
+	createPartIfMissing("ShopOpenZone", function(shopZone)
+		shopZone.Shape = Enum.PartType.Cylinder
+		shopZone.Size = Vector3.new(0.25, 18, 18)
+		shopZone.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 0.08, 0)) * CFrame.Angles(0, 0, math.rad(90))
+		shopZone.Material = Enum.Material.Neon
+		shopZone.Color = Color3.fromRGB(80, 210, 255)
+		shopZone.Transparency = 0.55
+		shopZone.Anchored = true
+		shopZone.CanCollide = false
+	end)
 
-	local shopCounter = shopModel:FindFirstChild("ShopCounter") or Instance.new("Part")
-	shopCounter.Name = "ShopCounter"
-	shopCounter.Size = Vector3.new(8, 3, 2)
-	shopCounter.Position = SHOP_POSITION + Vector3.new(0, 1.5, -7)
-	shopCounter.Material = Enum.Material.WoodPlanks
-	shopCounter.Color = Color3.fromRGB(157, 107, 63)
-	shopCounter.Anchored = true
-	shopCounter.Parent = shopModel
+	createPartIfMissing("ShopCounter", function(shopCounter)
+		shopCounter.Size = Vector3.new(8, 3, 2)
+		shopCounter.Position = SHOP_POSITION + Vector3.new(0, 1.5, -7)
+		shopCounter.Material = Enum.Material.WoodPlanks
+		shopCounter.Color = Color3.fromRGB(157, 107, 63)
+		shopCounter.Anchored = true
+	end)
 
-	local sign = shopModel:FindFirstChild("ShopSign") or Instance.new("Part")
-	sign.Name = "ShopSign"
-	sign.Size = Vector3.new(10, 2, 0.4)
-	sign.Position = SHOP_POSITION + Vector3.new(0, 6, -7.3)
-	sign.Material = Enum.Material.WoodPlanks
-	sign.Color = Color3.fromRGB(118, 74, 34)
-	sign.Anchored = true
-	sign.Parent = shopModel
+	createPartIfMissing("ShopSign", function(sign)
+		sign.Size = Vector3.new(10, 2, 0.4)
+		sign.Position = SHOP_POSITION + Vector3.new(0, 6, -7.3)
+		sign.Material = Enum.Material.WoodPlanks
+		sign.Color = Color3.fromRGB(118, 74, 34)
+		sign.Anchored = true
+	end)
 
-	local previewBase = shopModel:FindFirstChild("ShopPreviewBase") or Instance.new("Part")
-	previewBase.Name = "ShopPreviewBase"
-	previewBase.Size = Vector3.new(10, 0.5, 10)
-	previewBase.Position = SHOP_PREVIEW_POSITION + Vector3.new(0, 0.25, 0)
-	previewBase.Material = Enum.Material.WoodPlanks
-	previewBase.Color = Color3.fromRGB(120, 75, 35)
-	previewBase.Anchored = true
-	previewBase.Parent = shopModel
+	createPartIfMissing("ShopPreviewBase", function(previewBase)
+		previewBase.Size = Vector3.new(10, 0.5, 10)
+		previewBase.Position = SHOP_PREVIEW_POSITION + Vector3.new(0, 0.25, 0)
+		previewBase.Material = Enum.Material.WoodPlanks
+		previewBase.Color = Color3.fromRGB(120, 75, 35)
+		previewBase.Anchored = true
+	end)
 
-	local cameraAnchor = shopModel:FindFirstChild("ShopCameraAnchor") or Instance.new("Part")
-	cameraAnchor.Name = "ShopCameraAnchor"
-	cameraAnchor.Size = Vector3.new(1, 1, 1)
-	cameraAnchor.Transparency = 1
-	cameraAnchor.CanCollide = false
-	cameraAnchor.Anchored = true
-	cameraAnchor.CFrame = CFrame.lookAt(SHOP_PREVIEW_POSITION + Vector3.new(0, 5, 11), SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
-	cameraAnchor.Parent = shopModel
+	createPartIfMissing("ShopCameraAnchor", function(cameraAnchor)
+		cameraAnchor.Size = Vector3.new(1, 1, 1)
+		cameraAnchor.Transparency = 1
+		cameraAnchor.CanCollide = false
+		cameraAnchor.Anchored = true
+		cameraAnchor.CFrame = CFrame.lookAt(SHOP_PREVIEW_POSITION + Vector3.new(0, 5, 11), SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
+	end)
 
 	local previewFolder = shopModel:FindFirstChild("ShopPreviewModels") or Instance.new("Folder")
 	previewFolder.Name = "ShopPreviewModels"
@@ -743,6 +804,7 @@ local function createShopWorld()
 		if not itemModelsFolder:FindFirstChild(catalogItem.id) then
 			local itemFolder = Instance.new("Folder")
 			itemFolder.Name = catalogItem.id
+			itemFolder:SetAttribute("ShopItem", false)
 			itemFolder.Parent = itemModelsFolder
 			createCatalogModel(itemFolder, catalogItem, CFrame.new())
 		end
@@ -754,18 +816,21 @@ local function createShopWorld()
 	local effectsFolder = miningAssets:FindFirstChild("MiningEffects") or Instance.new("Folder")
 	effectsFolder.Name = "MiningEffects"
 	effectsFolder.Parent = miningAssets
-	if not effectsFolder:FindFirstChild("IonMiningParticles") then
-		local particles = Instance.new("ParticleEmitter")
-		particles.Name = "IonMiningParticles"
-		particles.Texture = "rbxassetid://243660364"
-		particles.Color = ColorSequence.new(Color3.fromRGB(70, 210, 255), Color3.fromRGB(210, 90, 255))
-		particles.LightEmission = 0.8
-		particles.Rate = 0
-		particles.Lifetime = NumberRange.new(0.25, 0.45)
-		particles.Speed = NumberRange.new(4, 8)
-		particles.SpreadAngle = Vector2.new(180, 180)
-		particles.Parent = effectsFolder
-	end
+	local debrisConfig = effectsFolder:FindFirstChild("MiningDebrisConfig") or Instance.new("Folder")
+	debrisConfig.Name = "MiningDebrisConfig"
+	debrisConfig.Parent = effectsFolder
+	local debrisCount = debrisConfig:FindFirstChild("DebrisCount") or Instance.new("IntValue")
+	debrisCount.Name = "DebrisCount"
+	debrisCount.Value = MINING_DEBRIS_COUNT
+	debrisCount.Parent = debrisConfig
+	local debrisLifetime = debrisConfig:FindFirstChild("DebrisLifetime") or Instance.new("NumberValue")
+	debrisLifetime.Name = "DebrisLifetime"
+	debrisLifetime.Value = 0.8
+	debrisLifetime.Parent = debrisConfig
+	local debrisSpeed = debrisConfig:FindFirstChild("DebrisSpeed") or Instance.new("NumberValue")
+	debrisSpeed.Name = "DebrisSpeed"
+	debrisSpeed.Value = 24
+	debrisSpeed.Parent = debrisConfig
 	if not effectsFolder:FindFirstChild("MiningImpactSound") then
 		local sound = Instance.new("Sound")
 		sound.Name = "MiningImpactSound"
@@ -801,6 +866,8 @@ local function getChestLevel(levelId)
 	return CHEST_LEVELS[1]
 end
 
+local releaseCactus
+
 -- 炸彈爆炸邏輯
 local function triggerExplosion(player, centerPos, radius)
 	radius = radius or 1
@@ -825,6 +892,7 @@ local function triggerExplosion(player, centerPos, radius)
 				if blockType then
 					worldData[key] = false
 					if spawnedParts[key] then
+						releaseCactus(spawnedParts[key])
 						spawnedParts[key]:Destroy()
 						spawnedParts[key] = nil
 					end
@@ -845,7 +913,9 @@ local function triggerExplosion(player, centerPos, radius)
 		lstats.Coins.Value += earnedCoins
 		rewardEmojiEvent:FireClient(player, "💥", earnedCoins)
 	end
-	sendNotification(player, "炸彈爆炸", "成功轟炸！收集了 " .. earnedSand .. " 顆沙子。")
+	if earnedSand > 0 then
+		sendNotification(player, "炸彈爆炸", "成功轟炸！收集了 " .. earnedSand .. " 顆沙子。")
+	end
 end
 
 -- 商店交易後端
@@ -880,7 +950,7 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 			sendNotification(player, "提示", "身上沒有沙子可以賣。")
 		end
 	elseif action == "BuyTool" then
-		local price = TOOL_PRICES[item]
+		local price = catalogPrice or TOOL_PRICES[item]
 		if price and coins.Value >= price and giveTool(player, item) then
 			coins.Value -= price
 			currentPickaxe.Value = item
@@ -1059,7 +1129,7 @@ local function instanceBlock(bx, by, bz)
 	if by == getSurfaceHeight(bx, bz) and shouldSpawnCactus(bx, bz) then
 		local cactus = Instance.new("Part")
 		cactus.Name = "Cactus"
-		cactus.Size = Vector3.new(1.1, math.random(2, 4) * 2, 1.1)
+		cactus.Size = Vector3.new(1.6, math.random(4, 7) * CACTUS_HEIGHT_SCALE, 1.6)
 		cactus.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + cactus.Size.Y / 2, 0)
 		cactus.Material = Enum.Material.Grass
 		cactus.Color = Color3.fromRGB(35, 135, 55)
@@ -1078,6 +1148,21 @@ local function revealNeighbors(bx, by, bz)
 			instanceBlock(nx, ny, nz)
 		end
 	end
+end
+
+function releaseCactus(blockModel)
+	local cactus = blockModel and blockModel:FindFirstChild("Cactus")
+	if not cactus then
+		return
+	end
+	local fallingCactus = cactus:Clone()
+	fallingCactus.Parent = Workspace
+	fallingCactus.Anchored = false
+	fallingCactus.CanCollide = true
+	fallingCactus.AssemblyLinearVelocity = Vector3.new(math.random(-8, 8), 14, math.random(-8, 8))
+	fallingCactus.AssemblyAngularVelocity = Vector3.new(math.random(-5, 5), math.random(-5, 5), math.random(-5, 5))
+	TweenService:Create(fallingCactus, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 1 }):Play()
+	Debris:AddItem(fallingCactus, 1.55)
 end
 
 -- ==================== 4. 統一處理挖掘事件 (不透過 ClickDetector) ====================
@@ -1169,14 +1254,27 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 
 	local miningAssets = ServerStorage:FindFirstChild("MiningAssets")
 	local miningEffects = miningAssets and miningAssets:FindFirstChild("MiningEffects")
-	local particleTemplate = miningEffects and miningEffects:FindFirstChild("IonMiningParticles")
-	if particleTemplate then
-		local particles = particleTemplate:Clone()
-		particles.Parent = targetPart
-		particles:Emit(14)
-		task.delay(1, function()
-			particles:Destroy()
-		end)
+	local debrisConfig = miningEffects and miningEffects:FindFirstChild("MiningDebrisConfig")
+	local debrisCount = (debrisConfig and debrisConfig:FindFirstChild("DebrisCount") and debrisConfig.DebrisCount.Value) or MINING_DEBRIS_COUNT
+	local debrisLifetime = (debrisConfig and debrisConfig:FindFirstChild("DebrisLifetime") and debrisConfig.DebrisLifetime.Value) or 0.8
+	local debrisSpeed = (debrisConfig and debrisConfig:FindFirstChild("DebrisSpeed") and debrisConfig.DebrisSpeed.Value) or 24
+	local hitNormal = (targetPart.Position - ((player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Position) or targetPart.Position)).Unit
+	if hitNormal.Magnitude ~= hitNormal.Magnitude then
+		hitNormal = Vector3.new(0, 1, 0)
+	end
+	for _ = 1, debrisCount do
+		local chip = Instance.new("Part")
+		chip.Name = "MiningDebrisChip"
+		chip.Size = Vector3.new(0.22, 0.22, 0.22) * math.random(60, 130) / 100
+		chip.Material = targetPart.Material
+		chip.Color = targetPart.Color
+		chip.CFrame = CFrame.new(targetPart.Position + hitNormal * (targetPart.Size.Magnitude / 8))
+		chip.CanCollide = true
+		chip.Parent = Workspace
+		chip.AssemblyLinearVelocity = (hitNormal * debrisSpeed) + Vector3.new(math.random(-8, 8), math.random(8, 18), math.random(-8, 8))
+		chip.AssemblyAngularVelocity = Vector3.new(math.random(-8, 8), math.random(-8, 8), math.random(-8, 8))
+		TweenService:Create(chip, TweenInfo.new(debrisLifetime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 1 }):Play()
+		Debris:AddItem(chip, debrisLifetime + 0.1)
 	end
 	local soundTemplate = miningEffects and miningEffects:FindFirstChild("MiningImpactSound")
 	if soundTemplate then
@@ -1194,6 +1292,7 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		worldData[key] = false
 		blockHealthData[key] = nil
 		if spawnedParts[key] then
+			releaseCactus(spawnedParts[key])
 			spawnedParts[key]:Destroy()
 			spawnedParts[key] = nil
 		end
@@ -1204,7 +1303,6 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 			local reward = math.random(level.reward[1], level.reward[2])
 			lstats.Coins.Value += reward
 			rewardEmojiEvent:FireClient(player, level.emoji or "🪙", reward)
-			sendNotification(player, "發現寶藏", "砸開 " .. level.id .. " 寶箱，獲得 " .. reward .. " 金幣！")
 		else
 			lstats.Sand.Value = math.clamp(lstats.Sand.Value + 1, 0, maxSand.Value)
 		end

@@ -5,6 +5,12 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
+if player:GetAttribute("MiningClientInitialized") then
+	script:Destroy()
+	return
+end
+player:SetAttribute("MiningClientInitialized", true)
+
 local mouse = player:GetMouse()
 local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
 
