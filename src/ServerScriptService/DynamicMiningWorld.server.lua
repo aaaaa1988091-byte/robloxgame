@@ -19,17 +19,21 @@ local HILL_HEIGHT_BLOCKS = 9
 local CACTUS_CHANCE = 0.02
 local DEADWOOD_CHANCE = 0.035
 local OASIS_CHANCE = 0.018
+local TREE_CHANCE = 0.028
 local CACTUS_HEIGHT_SCALE = 2.2
 local MINING_DEBRIS_COUNT = 18
 local MAX_BACKPACK_CAPPED = 20
 local BACKPACK_UPGRADE_AMOUNT = 20
 local PET_MINE_RADIUS_BLOCKS = 2
 local PET_MINE_INTERVAL = 7
-local WORLD_REFRESH_SECONDS = 10 * 60
+local WORLD_REFRESH_SECONDS = 5 * 60
 local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlayerDataV2")
 
 local SHOP_POSITION = Vector3.new(0, 0, -25)
-local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
+local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0) -- 高空本地預覽
+local WORLD_SEED = math.random(1, 1000000)
+local lastShopTeleportAt = {}
+local activeBackpackModels = {}
 local BOMB_THROW_FLIGHT_TIME = 0.42
 
 -- 寶箱可維護設定：新增等級只要複製一列，調整 id / minDepth / weight / color / health / reward。
@@ -88,6 +92,7 @@ local teleportEvent = getRemote("RemoteEvent", "TeleportToShop")
 local shopActionEvent = getRemote("RemoteEvent", "ShopAction")
 local miningEvent = getRemote("RemoteEvent", "MiningEvent")
 local rewardEmojiEvent = getRemote("RemoteEvent", "RewardEmojiEvent")
+local abilityDraftEvent = getRemote("RemoteEvent", "AbilityDraftEvent")
 local shopCatalogFunction = getRemote("RemoteFunction", "GetShopCatalog")
 
 local nextWorldRefreshTimeValue = ReplicatedStorage:FindFirstChild("NextWorldRefreshTime") or Instance.new("IntValue")
@@ -124,6 +129,11 @@ local activePetLoops = {}
 local ensureSandPet = function() end
 
 local function teleportPlayerToSteel(player)
+	local now = os.clock()
+	if lastShopTeleportAt[player] and now - lastShopTeleportAt[player] < 2.5 then
+		return
+	end
+	lastShopTeleportAt[player] = now
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if root then
@@ -153,6 +163,8 @@ local function rememberTool(player, toolName)
 end
 
 local ITEM_STORAGE_FOLDER_NAME = "MiningItemModels"
+local WORLD_ASSET_FOLDER_NAME = "MiningWorldEditableModels"
+local SOUND_FOLDER_NAME = "MiningConfigurableSounds"
 local DEFAULT_CATALOG_IDS = {
 	sell_sand = true,
 	wood_pickaxe = true,
@@ -164,6 +176,61 @@ local DEFAULT_CATALOG_IDS = {
 	cluster_bomb = true,
 	backpack_upgrade = true,
 }
+
+
+local ORE_LEVELS = {
+	Coal = { name = "煤炭", minDepth = 20, chance = 0.010, color = Color3.fromRGB(35, 35, 35), material = Enum.Material.Slate, blocks = 80 },
+	Copper = { name = "銅", minDepth = 45, chance = 0.0075, color = Color3.fromRGB(184, 103, 45), material = Enum.Material.Metal, blocks = 180 },
+	Iron = { name = "鐵", minDepth = 80, chance = 0.0058, color = Color3.fromRGB(160, 165, 170), material = Enum.Material.Metal, blocks = 350 },
+	Silver = { name = "銀", minDepth = 130, chance = 0.0038, color = Color3.fromRGB(210, 215, 225), material = Enum.Material.Metal, blocks = 800 },
+	Gold = { name = "金", minDepth = 210, chance = 0.0022, color = Color3.fromRGB(255, 210, 70), material = Enum.Material.Metal, blocks = 1400 },
+	Diamond = { name = "鑽石", minDepth = 320, chance = 0.0010, color = Color3.fromRGB(70, 235, 255), material = Enum.Material.Neon, blocks = 3000 },
+}
+
+local function getWorldAssetFolder()
+	local assets = ServerStorage:FindFirstChild(WORLD_ASSET_FOLDER_NAME) or Instance.new("Folder")
+	assets.Name = WORLD_ASSET_FOLDER_NAME
+	assets.Parent = ServerStorage
+	for _, name in ipairs({ "Tree", "Cactus", "Deadwood", "Pyramid", "Backpack" }) do
+		if not assets:FindFirstChild(name) then
+			local folder = Instance.new("Folder")
+			folder.Name = name
+			folder.Parent = assets
+		end
+	end
+	return assets
+end
+
+local function getSoundFolder()
+	local folder = ServerStorage:FindFirstChild(SOUND_FOLDER_NAME) or Instance.new("Folder")
+	folder.Name = SOUND_FOLDER_NAME
+	folder.Parent = ServerStorage
+	local defaults = {
+		MiningImpactSound = "rbxassetid://12221976", MoneySound = "rbxassetid://12222124", ChestMineSound = "rbxassetid://12221967",
+		LightningSound = "rbxassetid://9113420775", BombSound = "rbxassetid://138186576", PurchaseSound = "rbxassetid://12222253", ClaimSound = "rbxassetid://12222253",
+	}
+	for name, soundId in pairs(defaults) do
+		if not folder:FindFirstChild(name) then
+			local sound = Instance.new("Sound")
+			sound.Name = name
+			sound.SoundId = soundId
+			sound.Volume = 0.35
+			sound.RollOffMaxDistance = 60
+			sound.Parent = folder
+		end
+	end
+	return folder
+end
+
+local function playConfiguredSound(name, parent)
+	local template = getSoundFolder():FindFirstChild(name)
+	if template and template:IsA("Sound") and parent then
+		local sound = template:Clone()
+		sound.Parent = parent
+		sound:Play()
+		sound.Ended:Connect(function() sound:Destroy() end)
+	end
+end
 
 local function getItemStorageFolder()
 	local folder = ServerStorage:FindFirstChild(ITEM_STORAGE_FOLDER_NAME)
@@ -508,6 +575,8 @@ local function giveStoredWeapons(player)
 	refreshBombTools(player)
 end
 
+local updateBackpackModel = function() end
+
 Players.PlayerAdded:Connect(function(player)
 	local leaderstats = Instance.new("Folder")
 	leaderstats.Name = "leaderstats"
@@ -517,6 +586,11 @@ Players.PlayerAdded:Connect(function(player)
 	money.Name = "Coins"
 	money.Value = 0
 	money.Parent = leaderstats
+
+	local totalBlocks = Instance.new("IntValue")
+	totalBlocks.Name = "TotalBlocks"
+	totalBlocks.Value = 0
+	totalBlocks.Parent = leaderstats
 
 	local sandCount = Instance.new("IntValue")
 	sandCount.Name = "Sand"
@@ -554,6 +628,7 @@ Players.PlayerAdded:Connect(function(player)
 	end)
 	if success and type(savedData) == "table" then
 		money.Value = tonumber(savedData.Coins) or 0
+		totalBlocks.Value = tonumber(savedData.TotalBlocks) or 0
 		currentPickaxe.Value = savedData.CurrentPickaxe or "拳頭"
 		bombCount.Value = tonumber(savedData.BombCount) or 0
 		clusterBombCount.Value = tonumber(savedData.ClusterBombCount) or 0
@@ -571,11 +646,59 @@ Players.PlayerAdded:Connect(function(player)
 		giveStoredWeapons(player)
 		ensureSandPet(player)
 		teleportPlayerToSteel(player)
+		updateBackpackModel(player)
 	end)
 	hasSandPet.Changed:Connect(function()
 		ensureSandPet(player)
 	end)
 end)
+
+
+function updateBackpackModel(player)
+	local character = player.Character
+	local torso = character and (character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso"))
+	if not character or not torso then
+		return
+	end
+	if activeBackpackModels[player] then
+		activeBackpackModels[player]:Destroy()
+		activeBackpackModels[player] = nil
+	end
+	local maxSand = player:FindFirstChild("MaxSand")
+	local capacity = maxSand and maxSand.Value or MAX_BACKPACK_CAPPED
+	local templateFolder = getWorldAssetFolder():FindFirstChild("Backpack")
+	local template = templateFolder and templateFolder:FindFirstChild(tostring(capacity)) or (templateFolder and templateFolder:FindFirstChild("Default"))
+	local model = template and template:Clone() or Instance.new("Model")
+	model.Name = player.Name .. "_EquippedBackpack"
+	local mainPart = model:IsA("BasePart") and model or model:FindFirstChildWhichIsA("BasePart", true)
+	if model:IsA("BasePart") then
+		local wrapper = Instance.new("Model")
+		model.Parent = wrapper
+		model = wrapper
+	end
+	if not mainPart then
+		mainPart = Instance.new("Part")
+		mainPart.Name = "BackpackBody"
+		mainPart.Size = Vector3.new(1.8, 2.4, 0.75)
+		mainPart.Material = Enum.Material.Fabric
+		mainPart.Color = Color3.fromRGB(70 + capacity % 120, 120, 200)
+		mainPart.Parent = model
+	end
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = false
+			part.CanCollide = false
+		end
+	end
+	model.PrimaryPart = mainPart
+	model.Parent = character
+	mainPart.CFrame = torso.CFrame * CFrame.new(0, 0, 0.85)
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = torso
+	weld.Part1 = mainPart
+	weld.Parent = mainPart
+	activeBackpackModels[player] = model
+end
 
 local function savePlayerData(player)
 	local leaderstats = player:FindFirstChild("leaderstats")
@@ -595,6 +718,7 @@ local function savePlayerData(player)
 	pcall(function()
 		PLAYER_DATA_STORE:SetAsync(player.UserId, {
 			Coins = leaderstats.Coins.Value,
+			TotalBlocks = (leaderstats:FindFirstChild("TotalBlocks") and leaderstats.TotalBlocks.Value) or 0,
 			CurrentPickaxe = currentPickaxe.Value,
 			BombCount = bombCount.Value,
 			ClusterBombCount = clusterBombCount.Value,
@@ -608,7 +732,12 @@ end
 Players.PlayerRemoving:Connect(function(player)
 	savePlayerData(player)
 	playerMiningState[player] = nil
+	lastShopTeleportAt[player] = nil
 	activePetLoops[player] = nil
+	if activeBackpackModels[player] then
+		activeBackpackModels[player]:Destroy()
+		activeBackpackModels[player] = nil
+	end
 	if activePetModels[player] then
 		activePetModels[player]:Destroy()
 		activePetModels[player] = nil
@@ -941,6 +1070,9 @@ local function createShopWorld()
 		createCatalogModel(itemStand, catalogItem, CFrame.new(base.Position + Vector3.new(0, 2.2, 0)))
 	end
 
+	getWorldAssetFolder()
+	getSoundFolder()
+
 	local miningAssets = ServerStorage:FindFirstChild("MiningAssets") or Instance.new("Folder")
 	miningAssets.Name = "MiningAssets"
 	miningAssets.Parent = ServerStorage
@@ -1124,6 +1256,10 @@ local function triggerExplosion(player, centerPos, radius)
 	if not lstats or not maxSandVal then
 		return
 	end
+	if lstats.Sand.Value >= maxSandVal.Value then
+		sendNotification(player, "背包已滿", "背包滿後不能再丟炸彈，請先回商店出售。")
+		return
+	end
 
 	local cx, cy, cz = blockFromWorld(centerPos)
 
@@ -1162,6 +1298,7 @@ local function triggerExplosion(player, centerPos, radius)
 		rewardEmojiEvent:FireClient(player, "💥", earnedCoins)
 	end
 	if earnedSand > 0 then
+		if lstats:FindFirstChild("TotalBlocks") then lstats.TotalBlocks.Value += earnedSand end
 		sendNotification(player, "炸彈爆炸", "成功轟炸！收集了 " .. earnedSand .. " 顆沙子。")
 	end
 end
@@ -1230,6 +1367,7 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 		elseif coins.Value >= price then
 			coins.Value -= price
 			maxSand.Value = capacity
+			updateBackpackModel(player)
 			sendNotification(player, "購買成功", "背包容量變為 " .. capacity .. "！")
 		else
 			sendNotification(player, "交易失敗", "金幣不足。")
@@ -1255,8 +1393,8 @@ end)
 
 -- ==================== 3. 核心大世界生成機制 ====================
 local function getSurfaceHeight(bx, bz)
-	local broad = math.noise(bx * NOISE_SCALE, bz * NOISE_SCALE, 0) * HILL_HEIGHT_BLOCKS
-	local detail = math.noise(bx * NOISE_SCALE * 2.7, bz * NOISE_SCALE * 2.7, 31) * 1.5
+	local broad = math.noise(bx * NOISE_SCALE, bz * NOISE_SCALE, WORLD_SEED) * HILL_HEIGHT_BLOCKS
+	local detail = math.noise(bx * NOISE_SCALE * 2.7, bz * NOISE_SCALE * 2.7, WORLD_SEED + 31) * 1.5
 	return math.max(0, math.floor(broad + detail))
 end
 
@@ -1308,35 +1446,65 @@ local function getBlockData(bx, by, bz)
 			local level = getChestLevelForDepth(depth)
 			worldData[key] = { kind = "Chest", level = level.id }
 		else
-			worldData[key] = true
+			local oreData = nil
+			for oreId, ore in pairs(ORE_LEVELS) do
+				if depth >= ore.minDepth and math.random() < ore.chance then
+					oreData = { kind = "Ore", ore = oreId }
+					break
+				end
+			end
+			worldData[key] = oreData or true
 		end
 	end
 	return worldData[key]
 end
 
 local function getSurfaceBiome(bx, bz)
-	local n = math.noise(bx * 0.055, bz * 0.055, 117)
+	local n = math.noise(bx * 0.055, bz * 0.055, WORLD_SEED + 117)
 	if n < -0.42 then
 		return "white_sand", Color3.fromRGB(238, 226, 196), Enum.Material.Sand
 	elseif n < -0.08 then
 		return "clay", Color3.fromRGB(150, 86, 58), Enum.Material.Ground
 	elseif n < 0.32 then
 		return "mud", Color3.fromRGB(104, 75, 49), Enum.Material.Mud
+	elseif n < 0.58 then
+		return "red_sand", Color3.fromRGB(198, 94, 58), Enum.Material.Sand
 	end
-	return "red_sand", Color3.fromRGB(198, 94, 58), Enum.Material.Sand
+	return "grass", Color3.fromRGB(75, 150, 70), Enum.Material.Grass
 end
 
 local function shouldSpawnCactus(bx, bz)
-	local cactusNoise = math.noise(bx * 0.19, bz * 0.19, 83)
+	local cactusNoise = math.noise(bx * 0.19, bz * 0.19, WORLD_SEED + 83)
 	return cactusNoise > 0.38 and math.random() < CACTUS_CHANCE
 end
 
 local function shouldSpawnDeadwood(bx, bz)
-	return math.noise(bx * 0.13, bz * 0.13, 211) > 0.2 and math.random() < DEADWOOD_CHANCE
+	return math.noise(bx * 0.13, bz * 0.13, WORLD_SEED + 211) > 0.2 and math.random() < DEADWOOD_CHANCE
 end
 
 local function shouldSpawnOasis(bx, bz)
-	return math.noise(bx * 0.045, bz * 0.045, 377) > 0.55 and math.random() < OASIS_CHANCE
+	return math.noise(bx * 0.045, bz * 0.045, WORLD_SEED + 377) > 0.55 and math.random() < OASIS_CHANCE
+end
+
+local function shouldSpawnTree(bx, bz)
+	return math.noise(bx * 0.07, bz * 0.07, WORLD_SEED + 503) > 0.34 and math.random() < TREE_CHANCE
+end
+
+local function cloneEditableWorldModel(folderName, parent, pivotCFrame)
+	local modelFolder = getWorldAssetFolder():FindFirstChild(folderName)
+	local template = modelFolder and modelFolder:FindFirstChildWhichIsA("Model") or (modelFolder and modelFolder:FindFirstChildWhichIsA("BasePart"))
+	if template then
+		local clone = template:Clone()
+		clone.Parent = parent
+		if clone:IsA("Model") then
+			local primary = clone.PrimaryPart or clone:FindFirstChildWhichIsA("BasePart", true)
+			if primary then clone.PrimaryPart = primary clone:PivotTo(pivotCFrame) end
+		elseif clone:IsA("BasePart") then
+			clone.CFrame = pivotCFrame
+		end
+		return clone
+	end
+	return nil
 end
 
 local function isBlockExposed(bx, by, bz)
@@ -1361,9 +1529,10 @@ local function instanceBlock(bx, by, bz)
 	end
 
 	local chest = isChestBlock(blockType)
+	local ore = type(blockType) == "table" and blockType.kind == "Ore" and ORE_LEVELS[blockType.ore]
 	local chestLevel = chest and getChestLevel(blockType.level) or nil
 	local blockModel = Instance.new("Model")
-	blockModel.Name = chest and "ChestBlock" or "SandBlock"
+	blockModel.Name = chest and "ChestBlock" or (ore and "OreBlock" or "SandBlock")
 	blockModel.Parent = folder
 
 	local part
@@ -1410,8 +1579,13 @@ local function instanceBlock(bx, by, bz)
 
 	local depthPercent = math.clamp(math.abs(by) / MAX_DEPTH_BLOCKS, 0, 1)
 	local isSurface = by == getSurfaceHeight(bx, bz)
-	if not chest then
-		local _, biomeColor, biomeMaterial = getSurfaceBiome(bx, bz)
+	local biomeName = nil
+	if ore then
+		part.Material = ore.material
+		part.Color = ore.color
+	elseif not chest then
+		local biomeColor, biomeMaterial
+		biomeName, biomeColor, biomeMaterial = getSurfaceBiome(bx, bz)
 		part.Material = isSurface and biomeMaterial or Enum.Material.Sand
 		part.Color = biomeColor:Lerp(Color3.fromRGB(40, 30, 20), depthPercent)
 	end
@@ -1429,18 +1603,49 @@ local function instanceBlock(bx, by, bz)
 		water.Parent = blockModel
 	end
 
+	if isSurface and biomeName == "grass" and shouldSpawnTree(bx, bz) then
+		local tree = cloneEditableWorldModel("Tree", blockModel, CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2, 0)))
+		if not tree then
+			local trunk = Instance.new("Part")
+			trunk.Name = "Tree"
+			trunk.Size = Vector3.new(1.1, 5, 1.1)
+			trunk.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 2.5, 0)
+			trunk.Material = Enum.Material.Wood
+			trunk.Color = Color3.fromRGB(95, 60, 32)
+			trunk.Anchored = true
+			trunk.Parent = blockModel
+			local leaves = Instance.new("Part")
+			leaves.Name = "Leaves"
+			leaves.Shape = Enum.PartType.Ball
+			leaves.Size = Vector3.new(4.4, 4.4, 4.4)
+			leaves.Position = trunk.Position + Vector3.new(0, 3.2, 0)
+			leaves.Material = Enum.Material.Grass
+			leaves.Color = Color3.fromRGB(55, 135, 55)
+			leaves.Anchored = true
+			leaves.Parent = blockModel
+		end
+	end
+
 	if isSurface and shouldSpawnDeadwood(bx, bz) then
-		local log = Instance.new("Part")
+		local editableDeadwood = cloneEditableWorldModel("Deadwood", blockModel, CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.3, 0)))
+		if not editableDeadwood then
+			local log = Instance.new("Part")
 		log.Name = "Deadwood"
 		log.Size = Vector3.new(math.random(22, 34) / 10, 0.45, 0.45)
 		log.CFrame = CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.3, 0)) * CFrame.Angles(math.rad(math.random(-8, 8)), math.rad(math.random(0, 180)), math.rad(math.random(-8, 8)))
 		log.Material = Enum.Material.Wood
 		log.Color = Color3.fromRGB(92, 63, 39)
 		log.Anchored = true
-		log.Parent = blockModel
+			log.Parent = blockModel
+		end
 	end
 
 	if isSurface and shouldSpawnCactus(bx, bz) then
+		local editableCactus = cloneEditableWorldModel("Cactus", blockModel, CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2, 0)))
+		if editableCactus then
+			spawnedParts[key] = blockModel
+			return
+		end
 		local cactus = Instance.new("Part")
 		cactus.Name = "Cactus"
 		cactus.Size = Vector3.new(1.6, math.random(4, 7) * CACTUS_HEIGHT_SCALE, 1.6)
@@ -1554,7 +1759,8 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	end
 
 	local chestLevel = isChestBlock(blockType) and getChestLevel(blockType.level) or nil
-	local maxHealth = chestLevel and chestLevel.health or (math.abs(by) + 10)
+	local depthHardness = math.abs(by) + 10
+	local maxHealth = chestLevel and chestLevel.health or (depthHardness)
 	blockHealthData[key] = blockHealthData[key] or maxHealth
 
 	local stateKey = player.UserId .. ":" .. key
@@ -1590,7 +1796,7 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		TweenService:Create(chip, TweenInfo.new(debrisLifetime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 1 }):Play()
 		Debris:AddItem(chip, debrisLifetime + 0.1)
 	end
-	local soundTemplate = miningEffects and miningEffects:FindFirstChild("MiningImpactSound")
+	local soundTemplate = getSoundFolder():FindFirstChild(isChestBlock(blockType) and "ChestMineSound" or "MiningImpactSound")
 	if soundTemplate then
 		local sound = soundTemplate:Clone()
 		sound.Parent = targetPart
@@ -1618,7 +1824,10 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 			lstats.Coins.Value += reward
 			rewardEmojiEvent:FireClient(player, level.emoji or "🪙", reward)
 		else
-			lstats.Sand.Value = math.clamp(lstats.Sand.Value + 1, 0, maxSand.Value)
+			local ore = type(blockType) == "table" and blockType.kind == "Ore" and ORE_LEVELS[blockType.ore]
+			local gain = ore and ore.blocks or math.max(1, math.floor(depthHardness / 45) + 1)
+			lstats.Sand.Value = math.clamp(lstats.Sand.Value + gain, 0, maxSand.Value)
+			if lstats:FindFirstChild("TotalBlocks") then lstats.TotalBlocks.Value += gain end
 		end
 
 		revealNeighbors(bx, by, bz)
@@ -1633,6 +1842,7 @@ local function refreshWorld()
 	table.clear(spawnedParts)
 	table.clear(blockHealthData)
 	table.clear(playerMiningState)
+	WORLD_SEED = math.random(1, 1000000)
 	for _, player in ipairs(Players:GetPlayers()) do
 		local sand = player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Sand")
 		if sand then

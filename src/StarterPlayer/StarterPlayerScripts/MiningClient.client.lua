@@ -22,6 +22,7 @@ local teleportEvent = ReplicatedStorage:WaitForChild("TeleportToShop")
 local shopActionEvent = ReplicatedStorage:WaitForChild("ShopAction")
 local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
 local rewardEmojiEvent = ReplicatedStorage:WaitForChild("RewardEmojiEvent")
+local abilityDraftEvent = ReplicatedStorage:WaitForChild("AbilityDraftEvent")
 local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
 local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefreshTime")
 
@@ -62,6 +63,29 @@ local function getOrCreateChild(parent, className, name)
 	return created, true
 end
 
+local TRANSLATIONS = {
+	zh = { home = "一鍵回城", invite = "邀請好友", daily = "每日獎勵", robux = "克金商店", potions = "藥水", quests = "任務" },
+	en = { home = "Home", invite = "Invite", daily = "Daily", robux = "Premium", potions = "Potions", quests = "Quests" },
+}
+local currentLanguage = "zh"
+local function tr(key)
+	return (TRANSLATIONS[currentLanguage] and TRANSLATIONS[currentLanguage][key]) or TRANSLATIONS.zh[key] or key
+end
+
+local function tweenGuiOpen(frame, targetPosition)
+	frame.Visible = true
+	local targetSize = frame.Size
+	frame.Size = UDim2.fromOffset(math.max(20, targetSize.X.Offset * 0.86), math.max(20, targetSize.Y.Offset * 0.86))
+	frame.Position = targetPosition + UDim2.fromOffset(0, 28)
+	TweenService:Create(frame, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = targetPosition, Size = targetSize }):Play()
+end
+
+local function tweenGuiClose(frame)
+	local tween = TweenService:Create(frame, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = math.clamp(frame.BackgroundTransparency + 0.2, 0, 1) })
+	tween:Play()
+	tween.Completed:Connect(function() frame.Visible = false frame.BackgroundTransparency = math.max(0, frame.BackgroundTransparency - 0.2) end)
+end
+
 local function makeButton(name, text, size, position, parent)
 	local button, created = getOrCreateChild(parent, "TextButton", name)
 	button.Text = text
@@ -79,10 +103,62 @@ local function makeButton(name, text, size, position, parent)
 	return button
 end
 
-local homeButton = makeButton("TeleportHomeButton", "一鍵回城", UDim2.fromOffset(120, 42), UDim2.fromOffset(16, 160), gui)
+local homeButton = makeButton("TeleportHomeButton", tr("home"), UDim2.fromOffset(120, 42), UDim2.fromOffset(16, 160), gui)
 homeButton.MouseButton1Click:Connect(function()
 	teleportEvent:FireServer()
 end)
+
+
+local sideMenu = Instance.new("Frame")
+sideMenu.Name = "FeatureMenu"
+sideMenu.Size = UDim2.fromOffset(132, 276)
+sideMenu.Position = UDim2.fromOffset(16, 210)
+sideMenu.BackgroundTransparency = 1
+sideMenu.Parent = gui
+local featurePanels = {}
+local function makeFeaturePanel(key, titleText, bodyText)
+	local panel = Instance.new("Frame")
+	panel.Name = key .. "Panel"
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Size = UDim2.fromOffset(360, 240)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+	panel.BackgroundColor3 = Color3.fromRGB(30, 24, 38)
+	panel.Visible = false
+	panel.Parent = gui
+	addCorner(panel, 18)
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, -20, 0, 46)
+	titleLabel.Position = UDim2.fromOffset(10, 8)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = titleText
+	titleLabel.TextColor3 = Color3.fromRGB(255, 232, 170)
+	titleLabel.TextScaled = true
+	titleLabel.Parent = panel
+	local body = Instance.new("TextLabel")
+	body.Size = UDim2.new(1, -34, 1, -70)
+	body.Position = UDim2.fromOffset(17, 58)
+	body.BackgroundTransparency = 1
+	body.TextWrapped = true
+	body.TextScaled = true
+	body.TextColor3 = Color3.fromRGB(240, 240, 255)
+	body.Text = bodyText .. "\n\n（圖片式 UI 範本：之後可把 ImageLabel 放進此面板自行替換。）"
+	body.Parent = panel
+	featurePanels[key] = panel
+end
+for index, item in ipairs({
+	{ "invite", tr("invite"), "邀請好友獎勵入口" },
+	{ "daily", tr("daily"), "每日登入與每日任務領取" },
+	{ "robux", tr("robux"), "付費商品與禮包範本" },
+	{ "potions", tr("potions"), "力量、幸運、速度藥水清單" },
+	{ "quests", tr("quests"), "每日任務：砍樹、挖仙人掌可給藥水" },
+}) do
+	makeFeaturePanel(item[1], item[2], item[3])
+	local button = makeButton(item[1] .. "Button", item[2], UDim2.fromOffset(132, 40), UDim2.fromOffset(0, (index - 1) * 46), sideMenu)
+	button.MouseButton1Click:Connect(function()
+		for _, panel in pairs(featurePanels) do panel.Visible = false end
+		tweenGuiOpen(featurePanels[item[1]], UDim2.fromScale(0.5, 0.5))
+	end)
+end
 
 local infoLabel, infoCreated = getOrCreateChild(gui, "TextLabel", "WorldInfo")
 if infoCreated then
@@ -136,7 +212,7 @@ end)
 
 local shopCatalog = shopCatalogFunction:InvokeServer()
 local selectedShopIndex = 1
-local suppressShopOpenUntil = os.clock() + 5
+local suppressShopOpenUntil = os.clock() + 2.5
 local previousCameraType = nil
 local previousCameraSubject = nil
 local previousCameraCFrame = nil
@@ -500,9 +576,7 @@ local function openShop()
 	end
 	shopOpenCount += 1
 	refreshCatalogAndPreviews()
-	shopFrame.Visible = true
-	shopFrame.Position = UDim2.new(0.5, 0, 1, 80)
-	TweenService:Create(shopFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, 0, 1, -110) }):Play()
+	tweenGuiOpen(shopFrame, UDim2.new(0.5, 0, 1, -110))
 	focusShopCamera()
 	shopIsOpen = true
 	selectedShopIndex = 1
@@ -514,7 +588,7 @@ closeShop = function()
 		return
 	end
 	shopIsOpen = false
-	shopFrame.Visible = false
+	tweenGuiClose(shopFrame)
 	clear3DDisplays()
 	restoreCamera()
 end
@@ -674,7 +748,7 @@ sendNotificationEvent.OnClientEvent:Connect(function(titleText, message)
 end)
 
 player.CharacterAdded:Connect(function()
-	suppressShopOpenUntil = os.clock() + 5
+	suppressShopOpenUntil = os.clock() + 2.5
 	closeShop()
 end)
 
@@ -766,7 +840,8 @@ local function updateInfoPanel()
 	local seconds = remaining % 60
 	local sandText = sand and maxSand and (sand.Value .. "/" .. maxSand.Value) or "載入中"
 	local coinText = coins and coins.Value or 0
-	infoLabel.Text = string.format("金錢：$%s  背包：%s\n世界刷新：%02d:%02d", coinText, sandText, minutes, seconds)
+	local totalBlocks = leaderstats and leaderstats:FindFirstChild("TotalBlocks")
+	infoLabel.Text = string.format("金錢：$%s  背包：%s  總方塊：%s\n世界刷新：%02d:%02d", coinText, sandText, totalBlocks and totalBlocks.Value or 0, minutes, seconds)
 	fullBackpackButton.Visible = sand and maxSand and sand.Value >= maxSand.Value
 end
 
@@ -875,6 +950,51 @@ rewardEmojiEvent.OnClientEvent:Connect(function(emoji, amount)
 	tween.Completed:Connect(function()
 		rewardLabel:Destroy()
 	end)
+end)
+
+
+
+local abilityFrame = Instance.new("Frame")
+abilityFrame.Name = "AbilityDraftFrame"
+abilityFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+abilityFrame.Size = UDim2.fromOffset(620, 220)
+abilityFrame.Position = UDim2.fromScale(0.5, 0.42)
+abilityFrame.BackgroundColor3 = Color3.fromRGB(22, 20, 34)
+abilityFrame.Visible = false
+abilityFrame.Parent = gui
+addCorner(abilityFrame, 18)
+local abilityColors = { green = Color3.fromRGB(80, 190, 95), blue = Color3.fromRGB(75, 145, 255), purple = Color3.fromRGB(175, 90, 255), gold = Color3.fromRGB(255, 205, 65), orange = Color3.fromRGB(255, 125, 35) }
+local abilityPool = {
+	{ name = "炸彈威力 +20%", rarity = "green" }, { name = "力量 +20%", rarity = "green" }, { name = "挖掘範圍 +15%", rarity = "blue" },
+	{ name = "七彩霞光", rarity = "purple" }, { name = "散彈", rarity = "purple" }, { name = "雙手", rarity = "purple" },
+	{ name = "運氣佳", rarity = "gold" }, { name = "專注", rarity = "gold" }, { name = "核彈", rarity = "orange" }, { name = "雷射", rarity = "orange" },
+}
+local function showAbilityDraft()
+	for _, child in ipairs(abilityFrame:GetChildren()) do if child:IsA("TextButton") or child:IsA("TextLabel") then child:Destroy() end end
+	local header = Instance.new("TextLabel")
+	header.Size = UDim2.new(1, -20, 0, 42)
+	header.Position = UDim2.fromOffset(10, 8)
+	header.BackgroundTransparency = 1
+	header.Text = "選擇一張能力卡（相容式加成範本）"
+	header.TextColor3 = Color3.fromRGB(255,255,255)
+	header.TextScaled = true
+	header.Parent = abilityFrame
+	for i = 1, 3 do
+		local data = abilityPool[math.random(1, #abilityPool)]
+		local card = makeButton("AbilityCard" .. i, data.name, UDim2.fromOffset(180, 132), UDim2.fromOffset(30 + (i - 1) * 200, 68), abilityFrame)
+		card.BackgroundColor3 = abilityColors[data.rarity] or Color3.fromRGB(80, 190, 95)
+		card.MouseButton1Click:Connect(function() tweenGuiClose(abilityFrame) end)
+	end
+	tweenGuiOpen(abilityFrame, UDim2.fromScale(0.5, 0.42))
+end
+task.spawn(function()
+	while true do
+		task.wait(60)
+		showAbilityDraft()
+	end
+end)
+nextWorldRefreshTimeValue.Changed:Connect(function()
+	showAbilityDraft()
 end)
 
 miningEvent.OnClientEvent:Connect(function(targetPart, currentHealth, maxHealth)
