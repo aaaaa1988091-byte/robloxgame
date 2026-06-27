@@ -24,6 +24,7 @@ local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
 local rewardEmojiEvent = ReplicatedStorage:WaitForChild("RewardEmojiEvent")
 local abilityDraftEvent = ReplicatedStorage:WaitForChild("AbilityDraftEvent")
 local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
+local shopStateFunction = ReplicatedStorage:WaitForChild("GetShopState")
 local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefreshTime")
 
 local playerGui = player:WaitForChild("PlayerGui")
@@ -56,6 +57,8 @@ local function getOrCreateChild(parent, className, name)
 	local existing = parent:FindFirstChild(name)
 	if existing and existing.ClassName == className then
 		return existing, false
+	elseif existing then
+		existing:Destroy()
 	end
 	local created = Instance.new(className)
 	created.Name = name
@@ -64,12 +67,25 @@ local function getOrCreateChild(parent, className, name)
 end
 
 local TRANSLATIONS = {
-	zh = { home = "一鍵回城", invite = "邀請好友", daily = "每日獎勵", robux = "克金商店", potions = "藥水", quests = "任務" },
-	en = { home = "Home", invite = "Invite", daily = "Daily", robux = "Premium", potions = "Potions", quests = "Quests" },
+	zh = { home = "一鍵回城", invite = "邀請好友", daily = "每日獎勵", robux = "克金商店", potions = "藥水", quests = "任務", close = "關閉" },
+	en = { home = "Home", invite = "Invite", daily = "Daily", robux = "Premium", potions = "Potions", quests = "Quests", close = "Close" },
 }
 local currentLanguage = "zh"
 local function tr(key)
 	return (TRANSLATIONS[currentLanguage] and TRANSLATIONS[currentLanguage][key]) or TRANSLATIONS.zh[key] or key
+end
+
+local modalLockValue = gui:FindFirstChild("OpenModalCount") or Instance.new("IntValue")
+modalLockValue.Name = "OpenModalCount"
+modalLockValue.Value = 0
+modalLockValue.Parent = gui
+local modalFrames = {}
+local activeModal = nil
+local closeShop = nil
+local shopIsOpen = false
+
+local function registerModal(frame)
+	modalFrames[frame] = true
 end
 
 local function tweenGuiOpen(frame, targetPosition)
@@ -83,26 +99,71 @@ end
 local function tweenGuiClose(frame)
 	local tween = TweenService:Create(frame, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = math.clamp(frame.BackgroundTransparency + 0.2, 0, 1) })
 	tween:Play()
-	tween.Completed:Connect(function() frame.Visible = false frame.BackgroundTransparency = math.max(0, frame.BackgroundTransparency - 0.2) end)
+	tween.Completed:Connect(function()
+		frame.Visible = false
+		frame.BackgroundTransparency = math.max(0, frame.BackgroundTransparency - 0.2)
+	end)
 end
 
-local function makeButton(name, text, size, position, parent)
-	local button, created = getOrCreateChild(parent, "TextButton", name)
-	button.Text = text
+local function closeModal(frame)
+	if frame and frame.Visible then
+		tweenGuiClose(frame)
+	end
+	if activeModal == frame then
+		activeModal = nil
+		modalLockValue.Value = 0
+	end
+end
+
+local function openModal(frame, targetPosition)
+	for other in pairs(modalFrames) do
+		if other ~= frame then
+			other.Visible = false
+		end
+	end
+	activeModal = frame
+	modalLockValue.Value = 1
+	tweenGuiOpen(frame, targetPosition)
+end
+
+local function makeImageButton(name, text, size, position, parent, color, imageId)
+	local button, created = getOrCreateChild(parent, "ImageButton", name)
 	button.Size = size
 	button.Position = position
-	button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-	button.TextColor3 = Color3.fromRGB(255, 255, 255)
-	button.TextScaled = true
+	button.BackgroundColor3 = color or Color3.fromRGB(46, 60, 88)
+	button.Image = imageId or ""
+	button.ScaleType = Enum.ScaleType.Slice
+	button.SliceCenter = Rect.new(12, 12, 116, 116)
+	button.AutoButtonColor = true
 	button.Parent = parent
 	if created then
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 10)
-		corner.Parent = button
+		addCorner(button, 14)
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Color3.fromRGB(255, 238, 185)
+		stroke.Thickness = 2
+		stroke.Transparency = 0.15
+		stroke.Parent = button
+		local label = Instance.new("TextLabel")
+		label.Name = "Label"
+		label.BackgroundTransparency = 1
+		label.Size = UDim2.new(1, -10, 1, -8)
+		label.Position = UDim2.fromOffset(5, 4)
+		label.Font = Enum.Font.GothamBold
+		label.TextColor3 = Color3.fromRGB(255, 255, 255)
+		label.TextStrokeTransparency = 0.35
+		label.TextScaled = true
+		label.Parent = button
+	end
+	local label = button:FindFirstChild("Label")
+	if label then
+		label.Text = text
 	end
 	return button
 end
 
+local function makeButton(name, text, size, position, parent)
+	return makeImageButton(name, text, size, position, parent, Color3.fromRGB(35, 48, 72))
+end
 local homeButton = makeButton("TeleportHomeButton", tr("home"), UDim2.fromOffset(120, 42), UDim2.fromOffset(16, 160), gui)
 homeButton.MouseButton1Click:Connect(function()
 	teleportEvent:FireServer()
@@ -125,6 +186,7 @@ local function makeFeaturePanel(key, titleText, bodyText)
 	panel.BackgroundColor3 = Color3.fromRGB(30, 24, 38)
 	panel.Visible = false
 	panel.Parent = gui
+	registerModal(panel)
 	addCorner(panel, 18)
 	local titleLabel = Instance.new("TextLabel")
 	titleLabel.Size = UDim2.new(1, -20, 0, 46)
@@ -141,22 +203,26 @@ local function makeFeaturePanel(key, titleText, bodyText)
 	body.TextWrapped = true
 	body.TextScaled = true
 	body.TextColor3 = Color3.fromRGB(240, 240, 255)
-	body.Text = bodyText .. "\n\n（圖片式 UI 範本：之後可把 ImageLabel 放進此面板自行替換。）"
+	body.Text = bodyText
 	body.Parent = panel
+	local close = makeImageButton(key .. "Close", tr("close"), UDim2.fromOffset(96, 34), UDim2.new(1, -106, 1, -42), panel, Color3.fromRGB(135, 55, 55))
+	close.MouseButton1Click:Connect(function() closeModal(panel) end)
 	featurePanels[key] = panel
 end
 for index, item in ipairs({
-	{ "invite", tr("invite"), "邀請好友獎勵入口" },
-	{ "daily", tr("daily"), "每日登入與每日任務領取" },
-	{ "robux", tr("robux"), "付費商品與禮包範本" },
-	{ "potions", tr("potions"), "力量、幸運、速度藥水清單" },
-	{ "quests", tr("quests"), "每日任務：砍樹、挖仙人掌可給藥水" },
+	{ "invite", tr("invite"), "好友邀請\n• 圖片按鈕入口範本\n• 預留邀請成功獎勵欄位\n• 可替換背景圖片與圖示" },
+	{ "daily", tr("daily"), "每日獎勵\n• 第 1~7 天簽到格\n• 今日可領取狀態\n• 預留 Claim 按鈕與獎勵圖示" },
+	{ "robux", tr("robux"), "克金商店\n• 禮包卡片模板\n• Robux 商品圖片位\n• 購買按鈕使用圖片按鈕樣式" },
+	{ "potions", tr("potions"), "藥水背包\n• 力量藥水：提升挖掘力量\n• 幸運藥水：提高寶箱金錢\n• 速度藥水：提高移動速度" },
+	{ "quests", tr("quests"), "每日任務\n• 挖倒 10~20 個仙人掌：力量藥水\n• 挖倒 10~20 顆樹：速度藥水\n• 任務重置與領取按鈕模板" },
 }) do
 	makeFeaturePanel(item[1], item[2], item[3])
 	local button = makeButton(item[1] .. "Button", item[2], UDim2.fromOffset(132, 40), UDim2.fromOffset(0, (index - 1) * 46), sideMenu)
 	button.MouseButton1Click:Connect(function()
-		for _, panel in pairs(featurePanels) do panel.Visible = false end
-		tweenGuiOpen(featurePanels[item[1]], UDim2.fromScale(0.5, 0.5))
+		if closeShop and shopIsOpen then
+			closeShop()
+		end
+		openModal(featurePanels[item[1]], UDim2.fromScale(0.5, 0.5))
 	end)
 end
 
@@ -190,6 +256,7 @@ shopFrame.Position = UDim2.new(0.5, 0, 1, -110)
 shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 shopFrame.Visible = false
 shopFrame.Parent = gui
+registerModal(shopFrame)
 
 local title, titleCreated = getOrCreateChild(shopFrame, "TextLabel", "Title")
 title.Text = "礦工棚子商店"
@@ -200,8 +267,6 @@ title.TextColor3 = Color3.fromRGB(255, 235, 190)
 title.TextScaled = true
 title.Parent = shopFrame
 
-local closeShop
-
 local closeButton = makeButton("CloseButton", "X", UDim2.fromOffset(36, 36), UDim2.new(1, -44, 0, 8), shopFrame)
 closeButton.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
 closeButton.MouseButton1Click:Connect(function()
@@ -211,12 +276,12 @@ closeButton.MouseButton1Click:Connect(function()
 end)
 
 local shopCatalog = shopCatalogFunction:InvokeServer()
+local shopState = shopStateFunction:InvokeServer()
 local selectedShopIndex = 1
 local suppressShopOpenUntil = os.clock() + 2.5
 local previousCameraType = nil
 local previousCameraSubject = nil
 local previousCameraCFrame = nil
-local shopIsOpen = false
 
 local localPreviewFolder = Workspace:FindFirstChild("LocalShopPreviewModels")
 if not localPreviewFolder then
@@ -304,6 +369,7 @@ end
 
 local function refreshCatalogAndPreviews()
 	shopCatalog = shopCatalogFunction:InvokeServer()
+	shopState = shopStateFunction:InvokeServer()
 	for _, child in ipairs(localPreviewFolder:GetChildren()) do
 		if child.Name:match("^LocalPreview_") then
 			child:Destroy()
@@ -535,7 +601,14 @@ local function updateShopSelection(direction)
 	end
 	title.Text = item.name .. ((item.price and item.price > 0) and ("  $" .. item.price) or "")
 	descriptionLabel.Text = item.description
-	buyButton.Text = (item.action == "Sell") and "出售沙子" or "購買 / 使用"
+	local label = buyButton:FindFirstChild("Label")
+	local buttonText = (item.action == "Sell") and "出售沙子" or "購買"
+	if item.action == "BuyTool" and (item.item == "拳頭" or (shopState and shopState.ownedTools and shopState.ownedTools[item.item])) then
+		buttonText = (shopState.currentPickaxe == item.item) and "已裝備" or "裝備"
+	elseif item.action == "BuyBackpack" and shopState and tonumber(item.item) and shopState.maxSand >= tonumber(item.item) then
+		buttonText = "已擁有"
+	end
+	if label then label.Text = buttonText else buyButton.Text = buttonText end
 	setPreviewVisible(selectedShopIndex)
 	render3DShop(direction)
 end
@@ -576,7 +649,7 @@ local function openShop()
 	end
 	shopOpenCount += 1
 	refreshCatalogAndPreviews()
-	tweenGuiOpen(shopFrame, UDim2.new(0.5, 0, 1, -110))
+	openModal(shopFrame, UDim2.new(0.5, 0, 1, -110))
 	focusShopCamera()
 	shopIsOpen = true
 	selectedShopIndex = 1
@@ -588,7 +661,8 @@ closeShop = function()
 		return
 	end
 	shopIsOpen = false
-	tweenGuiClose(shopFrame)
+	closeModal(shopFrame)
+	suppressShopOpenUntil = os.clock() + 2.5
 	clear3DDisplays()
 	restoreCamera()
 end
@@ -607,6 +681,10 @@ buyButton.MouseButton1Click:Connect(function()
 	local item = shopCatalog[selectedShopIndex]
 	if item then
 		shopActionEvent:FireServer(item.id)
+		task.delay(0.25, function()
+			shopState = shopStateFunction:InvokeServer()
+			updateShopSelection(nil)
+		end)
 	end
 end)
 
@@ -787,8 +865,7 @@ local function connectShopOpenZone()
 	table.insert(shopTouchConnections, zone.Touched:Connect(function(hit)
 		local character = player.Character
 		if character and hit and hit:IsDescendantOf(character) then
-			touchingShopZone = true
-			openShop()
+			-- Polling loop below is the only place allowed to open the shop; Touched is noisy on Roblox characters.
 		end
 	end))
 
@@ -818,12 +895,18 @@ task.spawn(function()
 		local zone = shopWorld and shopWorld:FindFirstChild("ShopOpenZone")
 		if not zone then
 			connectShopOpenZone()
-		elseif shopIsOpen then
+		else
 			local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 			local flatDistance = root and Vector3.new(root.Position.X - zone.Position.X, 0, root.Position.Z - zone.Position.Z).Magnitude or math.huge
-			if flatDistance > math.max(zone.Size.Y, zone.Size.Z) / 2 + 2 then
+			local inside = flatDistance <= math.max(zone.Size.Y, zone.Size.Z) / 2
+			if inside and not touchingShopZone and modalLockValue.Value == 0 and os.clock() >= suppressShopOpenUntil then
+				touchingShopZone = true
+				openShop()
+			elseif not inside and touchingShopZone then
 				touchingShopZone = false
-				closeShop()
+				if shopIsOpen then
+					closeShop()
+				end
 			end
 		end
 		task.wait(0.25)
@@ -962,15 +1045,28 @@ abilityFrame.Position = UDim2.fromScale(0.5, 0.42)
 abilityFrame.BackgroundColor3 = Color3.fromRGB(22, 20, 34)
 abilityFrame.Visible = false
 abilityFrame.Parent = gui
+registerModal(abilityFrame)
 addCorner(abilityFrame, 18)
 local abilityColors = { green = Color3.fromRGB(80, 190, 95), blue = Color3.fromRGB(75, 145, 255), purple = Color3.fromRGB(175, 90, 255), gold = Color3.fromRGB(255, 205, 65), orange = Color3.fromRGB(255, 125, 35) }
 local abilityPool = {
-	{ name = "炸彈威力 +20%", rarity = "green" }, { name = "力量 +20%", rarity = "green" }, { name = "挖掘範圍 +15%", rarity = "blue" },
-	{ name = "七彩霞光", rarity = "purple" }, { name = "散彈", rarity = "purple" }, { name = "雙手", rarity = "purple" },
-	{ name = "運氣佳", rarity = "gold" }, { name = "專注", rarity = "gold" }, { name = "核彈", rarity = "orange" }, { name = "雷射", rarity = "orange" },
+	{ name = "炸彈威力 +20%", rarity = "green", weight = 46 }, { name = "力量 +20%", rarity = "green", weight = 46 },
+	{ name = "挖掘範圍 +15%", rarity = "blue", weight = 28 }, { name = "走路速度 +10%", rarity = "blue", weight = 28 },
+	{ name = "七彩霞光", rarity = "purple", weight = 10 }, { name = "散彈", rarity = "purple", weight = 10 }, { name = "雙手", rarity = "purple", weight = 10 },
+	{ name = "運氣佳", rarity = "gold", weight = 3 }, { name = "專注", rarity = "gold", weight = 3 },
+	{ name = "核彈", rarity = "orange", weight = 1 }, { name = "雷射", rarity = "orange", weight = 1 },
 }
+local function rollAbility()
+	local total = 0
+	for _, data in ipairs(abilityPool) do total += data.weight end
+	local roll = math.random() * total
+	for _, data in ipairs(abilityPool) do
+		roll -= data.weight
+		if roll <= 0 then return data end
+	end
+	return abilityPool[1]
+end
 local function showAbilityDraft()
-	for _, child in ipairs(abilityFrame:GetChildren()) do if child:IsA("TextButton") or child:IsA("TextLabel") then child:Destroy() end end
+	for _, child in ipairs(abilityFrame:GetChildren()) do if child:IsA("ImageButton") or child:IsA("TextButton") or child:IsA("TextLabel") then child:Destroy() end end
 	local header = Instance.new("TextLabel")
 	header.Size = UDim2.new(1, -20, 0, 42)
 	header.Position = UDim2.fromOffset(10, 8)
@@ -979,22 +1075,28 @@ local function showAbilityDraft()
 	header.TextColor3 = Color3.fromRGB(255,255,255)
 	header.TextScaled = true
 	header.Parent = abilityFrame
+	local close = makeImageButton("AbilityClose", "X", UDim2.fromOffset(42, 36), UDim2.new(1, -52, 0, 10), abilityFrame, Color3.fromRGB(130, 55, 55))
+	close.MouseButton1Click:Connect(function() closeModal(abilityFrame) end)
 	for i = 1, 3 do
-		local data = abilityPool[math.random(1, #abilityPool)]
-		local card = makeButton("AbilityCard" .. i, data.name, UDim2.fromOffset(180, 132), UDim2.fromOffset(30 + (i - 1) * 200, 68), abilityFrame)
+		local data = rollAbility()
+		local card = makeImageButton("AbilityCard" .. i, data.name, UDim2.fromOffset(180, 132), UDim2.fromOffset(30 + (i - 1) * 200, 68), abilityFrame)
 		card.BackgroundColor3 = abilityColors[data.rarity] or Color3.fromRGB(80, 190, 95)
-		card.MouseButton1Click:Connect(function() tweenGuiClose(abilityFrame) end)
+		card.MouseButton1Click:Connect(function() closeModal(abilityFrame) end)
 	end
-	tweenGuiOpen(abilityFrame, UDim2.fromScale(0.5, 0.42))
+	openModal(abilityFrame, UDim2.fromScale(0.5, 0.42))
 end
 task.spawn(function()
 	while true do
 		task.wait(60)
-		showAbilityDraft()
+		if modalLockValue.Value == 0 then
+			showAbilityDraft()
+		end
 	end
 end)
 nextWorldRefreshTimeValue.Changed:Connect(function()
-	showAbilityDraft()
+	if modalLockValue.Value == 0 then
+		showAbilityDraft()
+	end
 end)
 
 miningEvent.OnClientEvent:Connect(function(targetPart, currentHealth, maxHealth)

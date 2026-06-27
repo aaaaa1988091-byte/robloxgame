@@ -94,6 +94,7 @@ local miningEvent = getRemote("RemoteEvent", "MiningEvent")
 local rewardEmojiEvent = getRemote("RemoteEvent", "RewardEmojiEvent")
 local abilityDraftEvent = getRemote("RemoteEvent", "AbilityDraftEvent")
 local shopCatalogFunction = getRemote("RemoteFunction", "GetShopCatalog")
+local shopStateFunction = getRemote("RemoteFunction", "GetShopState")
 
 local nextWorldRefreshTimeValue = ReplicatedStorage:FindFirstChild("NextWorldRefreshTime") or Instance.new("IntValue")
 nextWorldRefreshTimeValue.Name = "NextWorldRefreshTime"
@@ -286,6 +287,16 @@ local SHOP_CATALOG = {
 		price = 0,
 		model = { kind = "block", size = Vector3.new(2.5, 2.5, 2.5), color = Color3.fromRGB(235, 205, 130), material = Enum.Material.Sand },
 	},
+
+	{
+		id = "fists",
+		name = "空手",
+		description = "不拿鎬子，切回空手狀態。已購買的工具會保留，可隨時再裝備。",
+		action = "BuyTool",
+		item = "拳頭",
+		price = 0,
+		model = { kind = "block", size = Vector3.new(1.5, 1.5, 1.5), color = Color3.fromRGB(245, 210, 170), material = Enum.Material.SmoothPlastic },
+	},
 	{
 		id = "wood_pickaxe",
 		name = "木鎬",
@@ -426,6 +437,20 @@ function getRuntimeShopCatalog()
 	return catalog
 end
 
+
+shopStateFunction.OnServerInvoke = function(player)
+	local owned = {}
+	local ownedTools = getOwnedToolsFolder(player)
+	for _, child in ipairs(ownedTools:GetChildren()) do
+		owned[child.Name] = true
+	end
+	return {
+		ownedTools = owned,
+		currentPickaxe = (player:FindFirstChild("CurrentPickaxe") and player.CurrentPickaxe.Value) or "拳頭",
+		maxSand = (player:FindFirstChild("MaxSand") and player.MaxSand.Value) or MAX_BACKPACK_CAPPED,
+	}
+end
+
 shopCatalogFunction.OnServerInvoke = function()
 	local serializableCatalog = {}
 	for _, catalogItem in ipairs(getRuntimeShopCatalog()) do
@@ -504,6 +529,32 @@ local function giveTool(player, toolName)
 	return true
 end
 
+local function removePickaxeTools(player)
+	for _, container in ipairs({ player:FindFirstChild("Backpack"), player.Character, player:FindFirstChild("StarterGear") }) do
+		if container then
+			for _, child in ipairs(container:GetChildren()) do
+				if child:IsA("Tool") and (child.Name == "拳頭" or table.find(PICKAXE_NAMES, child.Name)) then
+					child:Destroy()
+				end
+			end
+		end
+	end
+end
+
+local function equipMiningTool(player, toolName)
+	local ownedTools = getOwnedToolsFolder(player)
+	if toolName ~= "拳頭" and not ownedTools:FindFirstChild(toolName) then
+		return false
+	end
+	removePickaxeTools(player)
+	giveTool(player, toolName)
+	local currentPickaxe = player:FindFirstChild("CurrentPickaxe")
+	if currentPickaxe then
+		currentPickaxe.Value = toolName
+	end
+	return true
+end
+
 local function getBombCountValue(player, countName)
 	local value = player:FindFirstChild(countName)
 	if not value then
@@ -565,13 +616,12 @@ local function refreshBombTools(player)
 end
 
 local function giveStoredWeapons(player)
-	giveTool(player, "拳頭")
-	local ownedTools = getOwnedToolsFolder(player)
-	for _, toolName in ipairs(PICKAXE_NAMES) do
-		if ownedTools:FindFirstChild(toolName) then
-			giveTool(player, toolName)
-		end
+	local currentPickaxe = player:FindFirstChild("CurrentPickaxe")
+	local wantedTool = currentPickaxe and currentPickaxe.Value or "拳頭"
+	if wantedTool ~= "拳頭" and not getOwnedToolsFolder(player):FindFirstChild(wantedTool) then
+		wantedTool = "拳頭"
 	end
+	equipMiningTool(player, wantedTool)
 	refreshBombTools(player)
 end
 
@@ -829,6 +879,8 @@ local function getOrCreateChild(parent, className, name)
 	local existing = parent:FindFirstChild(name)
 	if existing and existing.ClassName == className then
 		return existing, false
+	elseif existing then
+		existing:Destroy()
 	end
 	local created = Instance.new(className)
 	created.Name = name
@@ -837,14 +889,25 @@ local function getOrCreateChild(parent, className, name)
 end
 
 local function configureGuiButton(parent, name, text, size, position)
-	local button, created = getOrCreateChild(parent, "TextButton", name)
+	local button, created = getOrCreateChild(parent, "ImageButton", name)
+	button.Size = size
+	button.Position = position
+	button.BackgroundColor3 = Color3.fromRGB(35, 48, 72)
+	button.Image = ""
+	button.AutoButtonColor = true
+	local label = button:FindFirstChild("Label")
+	if not label then
+		label = Instance.new("TextLabel")
+		label.Name = "Label"
+		label.BackgroundTransparency = 1
+		label.Size = UDim2.new(1, -10, 1, -8)
+		label.Position = UDim2.fromOffset(5, 4)
+		label.TextColor3 = Color3.fromRGB(255, 255, 255)
+		label.TextScaled = true
+		label.Parent = button
+	end
+	label.Text = text
 	if created then
-		button.Text = text
-		button.Size = size
-		button.Position = position
-		button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-		button.TextColor3 = Color3.fromRGB(255, 255, 255)
-		button.TextScaled = true
 		local corner = Instance.new("UICorner")
 		corner.CornerRadius = UDim.new(0, 10)
 		corner.Parent = button
@@ -1335,13 +1398,20 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 			sendNotification(player, "提示", "身上沒有沙子可以賣。")
 		end
 	elseif action == "BuyTool" then
+		local ownedTools = getOwnedToolsFolder(player)
+		local ownsTool = item == "拳頭" or ownedTools:FindFirstChild(item) ~= nil
 		local price = catalogPrice or TOOL_PRICES[item]
-		if price and coins.Value >= price and giveTool(player, item) then
+		if ownsTool then
+			if equipMiningTool(player, item) then
+				sendNotification(player, "裝備成功", "已裝備 " .. item .. "。")
+			end
+		elseif price and coins.Value >= price then
 			coins.Value -= price
-			currentPickaxe.Value = item
-			sendNotification(player, "購買成功", "獲得 " .. item .. "！")
+			rememberTool(player, item)
+			equipMiningTool(player, item)
+			sendNotification(player, "購買成功", "已購買並裝備 " .. item .. "！")
 		else
-			sendNotification(player, "交易失敗", "金幣不足，或已擁有該等級工具。")
+			sendNotification(player, "交易失敗", "金幣不足。")
 		end
 	elseif action == "BuyBomb" then
 		local countName = (item ~= "" and item) or "BombCount"
