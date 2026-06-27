@@ -3,6 +3,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
 
 local player = Players.LocalPlayer
 if player:GetAttribute("MiningClientInitialized") then
@@ -13,6 +15,7 @@ player:SetAttribute("MiningClientInitialized", true)
 
 local mouse = player:GetMouse()
 local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
+local SHOP_CARD_SPACING = 250
 
 local sendNotificationEvent = ReplicatedStorage:WaitForChild("SendNotification")
 local teleportEvent = ReplicatedStorage:WaitForChild("TeleportToShop")
@@ -99,8 +102,8 @@ end)
 
 local shopFrame, shopFrameCreated = getOrCreateChild(gui, "Frame", "ShopFrame")
 if shopFrameCreated then
-shopFrame.Size = UDim2.fromOffset(380, 240)
-shopFrame.Position = UDim2.new(0.5, -190, 1, -260)
+shopFrame.Size = UDim2.fromOffset(620, 300)
+shopFrame.Position = UDim2.new(0.5, -310, 1, -324)
 shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 shopFrame.Visible = false
 shopFrame.Parent = gui
@@ -157,7 +160,26 @@ local function createLocalPreviewModel(item, index)
 		return part
 	end
 
-	if modelData.kind == "pickaxe" then
+	local source = item.sourceName and localPreviewFolder:FindFirstChild(item.sourceName)
+	if source then
+		local clone = source:Clone()
+		clone.Name = "DisplayModel"
+		clone.Parent = model
+		mainPart = clone:IsA("BasePart") and clone or clone:FindFirstChildWhichIsA("BasePart", true)
+		if mainPart then
+			model.PrimaryPart = mainPart
+			model:PivotTo(CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new((index - 1) * 5, 3, 0)))
+		end
+	end
+	if mainPart then
+		for _, descendant in ipairs(model:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant.Anchored = true
+				descendant.CanCollide = false
+				descendant:SetAttribute("ShopIndex", index)
+			end
+		end
+	elseif modelData.kind == "pickaxe" then
 		mainPart = setupPart(Instance.new("Part"))
 		mainPart.Name = "Handle"
 		mainPart.Size = Vector3.new(0.35, 3.2, 0.35)
@@ -199,14 +221,26 @@ local function createLocalPreviewModel(item, index)
 	return model
 end
 
-for index, item in ipairs(shopCatalog) do
-	createLocalPreviewModel(item, index)
+
+local function refreshCatalogAndPreviews()
+	shopCatalog = shopCatalogFunction:InvokeServer()
+	for _, child in ipairs(localPreviewFolder:GetChildren()) do
+		if child.Name:match("^LocalPreview_") then
+			child:Destroy()
+		end
+	end
+	for index, item in ipairs(shopCatalog) do
+		createLocalPreviewModel(item, index)
+	end
+	selectedShopIndex = math.clamp(selectedShopIndex, 1, math.max(1, #shopCatalog))
 end
+
+refreshCatalogAndPreviews()
 
 local descriptionLabel, descriptionCreated = getOrCreateChild(shopFrame, "TextLabel", "Description")
 if descriptionCreated then
-descriptionLabel.Size = UDim2.new(1, -32, 0, 76)
-descriptionLabel.Position = UDim2.fromOffset(16, 56)
+descriptionLabel.Size = UDim2.new(1, -32, 0, 72)
+descriptionLabel.Position = UDim2.fromOffset(16, 60)
 descriptionLabel.BackgroundTransparency = 0.25
 descriptionLabel.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
 descriptionLabel.TextColor3 = Color3.fromRGB(255, 235, 190)
@@ -216,36 +250,90 @@ descriptionLabel.Parent = shopFrame
 addCorner(descriptionLabel, 12)
 end
 
-local previousButton = makeButton("PreviousItem", "◀ 上一個", UDim2.fromOffset(110, 42), UDim2.fromOffset(16, 150), shopFrame)
+local carousel, carouselCreated = getOrCreateChild(shopFrame, "Frame", "ItemCarousel")
+if carouselCreated then
+	carousel.Size = UDim2.new(1, -32, 0, 80)
+	carousel.Position = UDim2.fromOffset(16, 142)
+	carousel.BackgroundColor3 = Color3.fromRGB(38, 25, 15)
+	carousel.BackgroundTransparency = 0.08
+	carousel.ClipsDescendants = true
+	addCorner(carousel, 14)
+end
+
+local previousButton = makeButton("PreviousItem", "◀", UDim2.fromOffset(48, 42), UDim2.fromOffset(16, 238), shopFrame)
 previousButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
 
-local buyButton = makeButton("BuySelected", "購買", UDim2.fromOffset(120, 42), UDim2.fromOffset(130, 150), shopFrame)
+local buyButton = makeButton("BuySelected", "購買", UDim2.fromOffset(420, 42), UDim2.fromOffset(100, 238), shopFrame)
 buyButton.BackgroundColor3 = Color3.fromRGB(35, 95, 55)
 
-local nextButton = makeButton("NextItem", "下一個 ▶", UDim2.fromOffset(110, 42), UDim2.fromOffset(254, 150), shopFrame)
+local nextButton = makeButton("NextItem", "▶", UDim2.fromOffset(48, 42), UDim2.fromOffset(556, 238), shopFrame)
 nextButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
 
 local function getShopWorld()
 	return Workspace:FindFirstChild("MiningShopWorld")
 end
 
+local itemCards = {}
+local shopOpenCount = 0
+
+local function buildCarouselCards()
+	for _, child in ipairs(carousel:GetChildren()) do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+	table.clear(itemCards)
+	for index, item in ipairs(shopCatalog) do
+		local card = Instance.new("TextLabel")
+		card.Name = "ItemCard_" .. item.id
+		card.AnchorPoint = Vector2.new(0.5, 0.5)
+		card.Size = UDim2.fromOffset(210, 58)
+		card.Position = UDim2.fromOffset(carousel.AbsoluteSize.X + index * SHOP_CARD_SPACING, 40)
+		card.BackgroundColor3 = Color3.fromRGB(75, 50, 28)
+		card.TextColor3 = Color3.fromRGB(255, 235, 190)
+		card.TextScaled = true
+		card.Text = item.name .. ((item.price and item.price > 0) and ("\n$" .. item.price) or "")
+		card.Parent = carousel
+		addCorner(card, 12)
+		table.insert(itemCards, card)
+	end
+end
+
 local function setPreviewVisible(index)
 	for _, descendant in ipairs(localPreviewFolder:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			descendant.Transparency = (descendant:GetAttribute("ShopIndex") == index) and 0 or 1
+		if descendant:IsA("BasePart") and descendant:GetAttribute("ShopIndex") then
+			descendant.Transparency = (descendant:GetAttribute("ShopIndex") == index) and 0 or 0.65
 		end
 	end
 end
 
-local function updateShopSelection()
+local function updateCarousel(animated)
+	local centerX = math.max(160, carousel.AbsoluteSize.X / 2)
+	for index, card in ipairs(itemCards) do
+		local offset = (index - selectedShopIndex) * SHOP_CARD_SPACING
+		local props = {
+			Position = UDim2.fromOffset(centerX + offset, 40),
+			BackgroundColor3 = (index == selectedShopIndex) and Color3.fromRGB(130, 82, 38) or Color3.fromRGB(55, 36, 22),
+			TextTransparency = math.abs(index - selectedShopIndex) > 2 and 0.55 or 0,
+		}
+		if animated then
+			TweenService:Create(card, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+		else
+			for prop, value in pairs(props) do card[prop] = value end
+		end
+	end
+end
+
+local function updateShopSelection(animated)
 	local item = shopCatalog[selectedShopIndex]
 	if not item then
 		return
 	end
 	title.Text = item.name .. ((item.price and item.price > 0) and ("  $" .. item.price) or "")
 	descriptionLabel.Text = item.description
-	buyButton.Text = (item.action == "Sell") and "出售" or "購買 / 使用"
+	buyButton.Text = (item.action == "Sell") and "出售沙子" or "購買 / 使用"
 	setPreviewVisible(selectedShopIndex)
+	updateCarousel(animated)
 end
 
 local function focusShopCamera()
@@ -278,9 +366,16 @@ local function openShop()
 	if os.clock() < suppressShopOpenUntil then
 		return
 	end
+	shopOpenCount += 1
+	refreshCatalogAndPreviews()
 	shopFrame.Visible = true
+	shopFrame.Position = UDim2.new(1, 24, 1, -324)
+	TweenService:Create(shopFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, -310, 1, -324) }):Play()
 	focusShopCamera()
-	updateShopSelection()
+	buildCarouselCards()
+	selectedShopIndex = 1
+	updateShopSelection(false)
+	task.defer(function() updateCarousel(true) end)
 end
 
 closeShop = function()
@@ -290,12 +385,12 @@ end
 
 previousButton.MouseButton1Click:Connect(function()
 	selectedShopIndex = ((selectedShopIndex - 2) % #shopCatalog) + 1
-	updateShopSelection()
+	updateShopSelection(true)
 end)
 
 nextButton.MouseButton1Click:Connect(function()
 	selectedShopIndex = (selectedShopIndex % #shopCatalog) + 1
-	updateShopSelection()
+	updateShopSelection(true)
 end)
 
 buyButton.MouseButton1Click:Connect(function()
@@ -305,7 +400,7 @@ buyButton.MouseButton1Click:Connect(function()
 	end
 end)
 
-updateShopSelection()
+updateShopSelection(true)
 
 local oldPlayerProgress = gui:FindFirstChild("MiningProgress")
 if oldPlayerProgress then
@@ -441,6 +536,10 @@ nextWorldRefreshTimeValue.Changed:Connect(function()
 	closeShop()
 end)
 
+Lighting.FogColor = Color3.fromRGB(230, 210, 170)
+Lighting.FogStart = 180
+Lighting.FogEnd = 650
+
 local function isInsideShopZone()
 	local shopWorld = getShopWorld()
 	local zone = shopWorld and shopWorld:FindFirstChild("ShopOpenZone")
@@ -450,7 +549,7 @@ local function isInsideShopZone()
 		return false
 	end
 	local flatDistance = Vector3.new(root.Position.X - zone.Position.X, 0, root.Position.Z - zone.Position.Z).Magnitude
-	return flatDistance <= 9
+	return flatDistance <= 18
 end
 
 task.spawn(function()

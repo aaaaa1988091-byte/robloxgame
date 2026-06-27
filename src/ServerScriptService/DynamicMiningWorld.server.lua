@@ -9,14 +9,16 @@ local DataStoreService = game:GetService("DataStoreService")
 
 -- ==================== 參數設定 ====================
 local BLOCK_SIZE = 4
-local CHUNK_RADIUS_XZ = 14
+local CHUNK_RADIUS_XZ = 22
 local CHUNK_RADIUS_Y = 8
 local MAX_DEPTH_BLOCKS = 4000
 local CHEST_CHANCE = 0.02
 local STEEL_FLOOR_SIZE = Vector3.new(10, 1, 10)
 local NOISE_SCALE = 0.075
-local HILL_HEIGHT_BLOCKS = 5
-local CACTUS_CHANCE = 0.025
+local HILL_HEIGHT_BLOCKS = 9
+local CACTUS_CHANCE = 0.02
+local DEADWOOD_CHANCE = 0.035
+local OASIS_CHANCE = 0.018
 local CACTUS_HEIGHT_SCALE = 2.2
 local MINING_DEBRIS_COUNT = 18
 local MAX_BACKPACK_CAPPED = 20
@@ -120,7 +122,8 @@ local function teleportPlayerToSteel(player)
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if root then
-		root.CFrame = CFrame.new(getWorldOrigin() + Vector3.new(0, 7, 0))
+		local deck = Workspace:FindFirstChild("WoodDeck", true)
+		root.CFrame = CFrame.new((deck and deck.Position or getWorldOrigin()) + Vector3.new(0, 3, 0))
 	end
 end
 
@@ -167,22 +170,36 @@ local function getItemStorageFolder()
 	return folder
 end
 
+local function getConfigValue(container, name, fallback)
+	local child = container:FindFirstChild(name)
+	if child and child:IsA("ValueBase") then
+		return child.Value
+	end
+	local attribute = container:GetAttribute(name)
+	if attribute ~= nil then
+		return attribute
+	end
+	return fallback
+end
+
 local function readCatalogItemFromStorage(child)
 	if child:GetAttribute("ShopItem") == false or (DEFAULT_CATALOG_IDS[child.Name] and not child:GetAttribute("ShopItem")) then
 		return nil
 	end
-	local itemId = child:GetAttribute("Id") or child.Name
+	local itemId = getConfigValue(child, "Id", child.Name)
+	local previewMaterialName = getConfigValue(child, "PreviewMaterial", "Sand")
 	return {
 		id = itemId,
-		name = child:GetAttribute("DisplayName") or child.Name,
-		description = child:GetAttribute("Description") or "ServerStorage.MiningItemModels 內新增的商品。",
-		action = child:GetAttribute("Action") or "BuyTool",
-		item = child:GetAttribute("Item") or child.Name,
-		price = child:GetAttribute("Price") or 0,
+		name = getConfigValue(child, "DisplayName", child.Name),
+		description = getConfigValue(child, "Description", "在 LocalShopPreviewModels 或 ServerStorage.MiningItemModels 依格式新增的商品。"),
+		action = getConfigValue(child, "Action", "BuyTool"),
+		item = getConfigValue(child, "Item", child.Name),
+		price = getConfigValue(child, "Price", 0),
+		sourceName = child.Name,
 		model = {
-			kind = child:GetAttribute("PreviewKind") or "block",
-			color = child:GetAttribute("PreviewColor") or Color3.fromRGB(235, 205, 130),
-			material = Enum.Material[child:GetAttribute("PreviewMaterial") or "Sand"],
+			kind = getConfigValue(child, "PreviewKind", "stored"),
+			color = getConfigValue(child, "PreviewColor", Color3.fromRGB(235, 205, 130)),
+			material = Enum.Material[previewMaterialName] or Enum.Material.Sand,
 		},
 	}
 end
@@ -289,12 +306,24 @@ local function getCatalogItemById(itemId)
 	return nil
 end
 
+local function findCatalogSourceModel(catalogItem)
+	if not catalogItem or not catalogItem.sourceName then
+		return nil
+	end
+	local localFolder = Workspace:FindFirstChild("LocalShopPreviewModels")
+	return getItemStorageFolder():FindFirstChild(catalogItem.sourceName) or (localFolder and localFolder:FindFirstChild(catalogItem.sourceName))
+end
+
 function getRuntimeShopCatalog()
 	local catalog = table.clone(SHOP_CATALOG)
-	for _, child in ipairs(getItemStorageFolder():GetChildren()) do
-		local storageItem = readCatalogItemFromStorage(child)
-		if storageItem then
-			table.insert(catalog, storageItem)
+	for _, sourceFolder in ipairs({ getItemStorageFolder(), Workspace:FindFirstChild("LocalShopPreviewModels") }) do
+		if sourceFolder then
+			for _, child in ipairs(sourceFolder:GetChildren()) do
+				local storageItem = readCatalogItemFromStorage(child)
+				if storageItem then
+					table.insert(catalog, storageItem)
+				end
+			end
 		end
 	end
 	return catalog
@@ -311,6 +340,7 @@ shopCatalogFunction.OnServerInvoke = function()
 			action = catalogItem.action,
 			item = catalogItem.item,
 			model = catalogItem.model,
+			sourceName = catalogItem.sourceName,
 		})
 	end
 	return serializableCatalog
@@ -325,11 +355,27 @@ local function giveTool(player, toolName)
 
 	local tool = Instance.new("Tool")
 	tool.Name = toolName
-	tool:SetAttribute("Strength", TOOL_EFFICIENCY[toolName] or 1)
+	local catalogItem = nil
+	for _, candidate in ipairs(getRuntimeShopCatalog()) do
+		if candidate.item == toolName then
+			catalogItem = candidate
+			break
+		end
+	end
+	tool:SetAttribute("Strength", TOOL_EFFICIENCY[toolName] or (catalogItem and tonumber(catalogItem.price) and math.max(1, math.floor(catalogItem.price / 20))) or 1)
 	tool:SetAttribute("AutoMine", TOOL_AUTO_MINE[toolName] == true)
 
+	local sourceModel = findCatalogSourceModel(catalogItem)
+	local sourcePart = sourceModel and (sourceModel:IsA("BasePart") and sourceModel or sourceModel:FindFirstChildWhichIsA("BasePart", true))
 	if toolName == "拳頭" then
 		tool.RequiresHandle = false
+	elseif sourcePart then
+		tool.RequiresHandle = true
+		local handle = sourcePart:Clone()
+		handle.Name = "Handle"
+		handle.Anchored = false
+		handle.CanCollide = false
+		handle.Parent = tool
 	else
 		tool.RequiresHandle = true
 		local handle = Instance.new("Part")
@@ -573,7 +619,21 @@ local function createCatalogModel(parent, itemData, pivotCFrame)
 		mainPart.Anchored = true
 		mainPart.CFrame = pivotCFrame
 		mainPart.Parent = model
-	else
+	elseif itemData.sourceName then
+		local source = getItemStorageFolder():FindFirstChild(itemData.sourceName)
+			or (Workspace:FindFirstChild("LocalShopPreviewModels") and Workspace.LocalShopPreviewModels:FindFirstChild(itemData.sourceName))
+		if source then
+			local clone = source:Clone()
+			clone.Name = itemData.id .. "_Model"
+			clone.Parent = model
+			mainPart = clone:IsA("BasePart") and clone or clone:FindFirstChildWhichIsA("BasePart", true)
+			if mainPart then
+				model.PrimaryPart = mainPart
+				model:PivotTo(pivotCFrame)
+			end
+		end
+	end
+	if not mainPart then
 		mainPart = Instance.new("Part")
 		mainPart.Name = "DisplayBlock"
 		mainPart.Size = visual.size or Vector3.new(2, 2, 2)
@@ -645,8 +705,8 @@ local function ensureStarterGuiTemplate()
 
 	local shopFrame, shopCreated = getOrCreateChild(gui, "Frame", "ShopFrame")
 	if shopCreated then
-		shopFrame.Size = UDim2.fromOffset(380, 240)
-		shopFrame.Position = UDim2.new(0.5, -190, 1, -260)
+		shopFrame.Size = UDim2.fromOffset(620, 300)
+		shopFrame.Position = UDim2.new(0.5, -310, 1, -324)
 		shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 		shopFrame.Visible = false
 		local corner = Instance.new("UICorner")
@@ -654,9 +714,9 @@ local function ensureStarterGuiTemplate()
 		corner.Parent = shopFrame
 	end
 	configureGuiButton(shopFrame, "CloseButton", "X", UDim2.fromOffset(36, 36), UDim2.new(1, -44, 0, 8))
-	configureGuiButton(shopFrame, "PreviousItem", "◀ 上一個", UDim2.fromOffset(110, 42), UDim2.fromOffset(16, 150))
-	configureGuiButton(shopFrame, "BuySelected", "購買", UDim2.fromOffset(120, 42), UDim2.fromOffset(130, 150))
-	configureGuiButton(shopFrame, "NextItem", "下一個 ▶", UDim2.fromOffset(110, 42), UDim2.fromOffset(254, 150))
+	configureGuiButton(shopFrame, "PreviousItem", "◀", UDim2.fromOffset(48, 42), UDim2.fromOffset(16, 238))
+	configureGuiButton(shopFrame, "BuySelected", "購買", UDim2.fromOffset(420, 42), UDim2.fromOffset(100, 238))
+	configureGuiButton(shopFrame, "NextItem", "▶", UDim2.fromOffset(48, 42), UDim2.fromOffset(556, 238))
 
 	local title, titleCreated = getOrCreateChild(shopFrame, "TextLabel", "Title")
 	if titleCreated then
@@ -810,6 +870,28 @@ local function createShopWorld()
 		end
 	end
 
+	for _, child in ipairs(previewFolder:GetChildren()) do
+		if child:GetAttribute("GeneratedShopPreview") then
+			child:Destroy()
+		end
+	end
+	for index, catalogItem in ipairs(getRuntimeShopCatalog()) do
+		local itemStand = Instance.new("Model")
+		itemStand.Name = string.format("%02d_%s_PhysicalShopItem", index, catalogItem.id)
+		itemStand:SetAttribute("GeneratedShopPreview", true)
+		itemStand.Parent = previewFolder
+		local offsetX = (index - 1) * 5.5 - 10
+		local base = Instance.new("Part")
+		base.Name = "ItemBackground"
+		base.Size = Vector3.new(4.8, 0.35, 3.8)
+		base.Position = SHOP_POSITION + Vector3.new(offsetX, 1.15, -11.5)
+		base.Material = Enum.Material.WoodPlanks
+		base.Color = Color3.fromRGB(91, 58, 31)
+		base.Anchored = true
+		base.Parent = itemStand
+		createCatalogModel(itemStand, catalogItem, CFrame.new(base.Position + Vector3.new(0, 2.2, 0)))
+	end
+
 	local miningAssets = ServerStorage:FindFirstChild("MiningAssets") or Instance.new("Folder")
 	miningAssets.Name = "MiningAssets"
 	miningAssets.Parent = ServerStorage
@@ -843,13 +925,20 @@ local function createShopWorld()
 	-- 商品模型由每位玩家的 LocalScript 依目錄載入到高空預覽區，避免多人同時切換商品時互相影響。
 end
 createShopWorld()
+task.spawn(function()
+	while true do
+		task.wait(5)
+		createShopWorld()
+	end
+end)
 
 -- 一鍵回城
 teleportEvent.OnServerEvent:Connect(function(player)
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if root then
-		root.CFrame = CFrame.new(getWorldOrigin() + Vector3.new(0, 7, 0))
+		local deck = Workspace:FindFirstChild("WoodDeck", true)
+		root.CFrame = CFrame.new((deck and deck.Position or getWorldOrigin()) + Vector3.new(0, 3, 0))
 	end
 end)
 
@@ -1047,9 +1136,29 @@ local function getBlockData(bx, by, bz)
 	return worldData[key]
 end
 
+local function getSurfaceBiome(bx, bz)
+	local n = math.noise(bx * 0.055, bz * 0.055, 117)
+	if n < -0.42 then
+		return "white_sand", Color3.fromRGB(238, 226, 196), Enum.Material.Sand
+	elseif n < -0.08 then
+		return "clay", Color3.fromRGB(150, 86, 58), Enum.Material.Ground
+	elseif n < 0.32 then
+		return "mud", Color3.fromRGB(104, 75, 49), Enum.Material.Mud
+	end
+	return "red_sand", Color3.fromRGB(198, 94, 58), Enum.Material.Sand
+end
+
 local function shouldSpawnCactus(bx, bz)
 	local cactusNoise = math.noise(bx * 0.19, bz * 0.19, 83)
 	return cactusNoise > 0.38 and math.random() < CACTUS_CHANCE
+end
+
+local function shouldSpawnDeadwood(bx, bz)
+	return math.noise(bx * 0.13, bz * 0.13, 211) > 0.2 and math.random() < DEADWOOD_CHANCE
+end
+
+local function shouldSpawnOasis(bx, bz)
+	return math.noise(bx * 0.045, bz * 0.045, 377) > 0.55 and math.random() < OASIS_CHANCE
 end
 
 local function isBlockExposed(bx, by, bz)
@@ -1122,11 +1231,38 @@ local function instanceBlock(bx, by, bz)
 	part:SetAttribute("BlockKey", key)
 
 	local depthPercent = math.clamp(math.abs(by) / MAX_DEPTH_BLOCKS, 0, 1)
+	local isSurface = by == getSurfaceHeight(bx, bz)
 	if not chest then
-		part.Color = Color3.fromRGB(240, 200, 140):Lerp(Color3.fromRGB(40, 30, 20), depthPercent)
+		local _, biomeColor, biomeMaterial = getSurfaceBiome(bx, bz)
+		part.Material = isSurface and biomeMaterial or Enum.Material.Sand
+		part.Color = biomeColor:Lerp(Color3.fromRGB(40, 30, 20), depthPercent)
 	end
 
-	if by == getSurfaceHeight(bx, bz) and shouldSpawnCactus(bx, bz) then
+	if isSurface and shouldSpawnOasis(bx, bz) then
+		local water = Instance.new("Part")
+		water.Name = "OasisWater"
+		water.Size = Vector3.new(BLOCK_SIZE * 0.9, 0.16, BLOCK_SIZE * 0.9)
+		water.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.09, 0)
+		water.Material = Enum.Material.Water
+		water.Color = Color3.fromRGB(55, 170, 185)
+		water.Transparency = 0.25
+		water.Anchored = true
+		water.CanCollide = false
+		water.Parent = blockModel
+	end
+
+	if isSurface and shouldSpawnDeadwood(bx, bz) then
+		local log = Instance.new("Part")
+		log.Name = "Deadwood"
+		log.Size = Vector3.new(math.random(22, 34) / 10, 0.45, 0.45)
+		log.CFrame = CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.3, 0)) * CFrame.Angles(math.rad(math.random(-8, 8)), math.rad(math.random(0, 180)), math.rad(math.random(-8, 8)))
+		log.Material = Enum.Material.Wood
+		log.Color = Color3.fromRGB(92, 63, 39)
+		log.Anchored = true
+		log.Parent = blockModel
+	end
+
+	if isSurface and shouldSpawnCactus(bx, bz) then
 		local cactus = Instance.new("Part")
 		cactus.Name = "Cactus"
 		cactus.Size = Vector3.new(1.6, math.random(4, 7) * CACTUS_HEIGHT_SCALE, 1.6)
