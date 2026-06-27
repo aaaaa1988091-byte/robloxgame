@@ -16,6 +16,29 @@ local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlaye
 
 local SHOP_POSITION = Vector3.new(0, 0, -25)
 local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
+local BOMB_THROW_FLIGHT_TIME = 0.42
+
+local function getSteelFloor()
+	local shopModel = Workspace:FindFirstChild("MiningShopWorld")
+	return shopModel and shopModel:FindFirstChild("SecureFloor")
+end
+
+local function getWorldOrigin()
+	local steelFloor = getSteelFloor()
+	if steelFloor then
+		return Vector3.new(steelFloor.Position.X, steelFloor.Position.Y + steelFloor.Size.Y / 2, steelFloor.Position.Z)
+	end
+	return SHOP_POSITION
+end
+
+local function worldFromBlock(bx, by, bz)
+	return getWorldOrigin() + Vector3.new(bx * BLOCK_SIZE, by * BLOCK_SIZE, bz * BLOCK_SIZE)
+end
+
+local function blockFromWorld(position)
+	local relative = position - getWorldOrigin()
+	return math.floor((relative.X + BLOCK_SIZE / 2) / BLOCK_SIZE), math.floor((relative.Y + BLOCK_SIZE / 2) / BLOCK_SIZE), math.floor((relative.Z + BLOCK_SIZE / 2) / BLOCK_SIZE)
+end
 
 local folder = Workspace:FindFirstChild("DynamicMiningWorld") or Instance.new("Folder")
 folder.Name = "DynamicMiningWorld"
@@ -76,7 +99,7 @@ local function teleportPlayerToSteel(player)
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if root then
-		root.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 7, 0))
+		root.CFrame = CFrame.new(getWorldOrigin() + Vector3.new(0, 7, 0))
 	end
 end
 
@@ -591,8 +614,46 @@ local function createShopWorld()
 
 	local previewFolder = shopModel:FindFirstChild("ShopPreviewModels") or Instance.new("Folder")
 	previewFolder.Name = "ShopPreviewModels"
-	previewFolder:ClearAllChildren()
 	previewFolder.Parent = shopModel
+
+	local itemModelsFolder = ReplicatedStorage:FindFirstChild("MiningItemModels") or Instance.new("Folder")
+	itemModelsFolder.Name = "MiningItemModels"
+	itemModelsFolder.Parent = ReplicatedStorage
+	for _, catalogItem in ipairs(SHOP_CATALOG) do
+		if not itemModelsFolder:FindFirstChild(catalogItem.id) then
+			local itemFolder = Instance.new("Folder")
+			itemFolder.Name = catalogItem.id
+			itemFolder.Parent = itemModelsFolder
+			createCatalogModel(itemFolder, catalogItem, CFrame.new())
+		end
+	end
+
+	local miningAssets = ReplicatedStorage:FindFirstChild("MiningAssets") or Instance.new("Folder")
+	miningAssets.Name = "MiningAssets"
+	miningAssets.Parent = ReplicatedStorage
+	local effectsFolder = miningAssets:FindFirstChild("MiningEffects") or Instance.new("Folder")
+	effectsFolder.Name = "MiningEffects"
+	effectsFolder.Parent = miningAssets
+	if not effectsFolder:FindFirstChild("IonMiningParticles") then
+		local particles = Instance.new("ParticleEmitter")
+		particles.Name = "IonMiningParticles"
+		particles.Texture = "rbxassetid://243660364"
+		particles.Color = ColorSequence.new(Color3.fromRGB(70, 210, 255), Color3.fromRGB(210, 90, 255))
+		particles.LightEmission = 0.8
+		particles.Rate = 0
+		particles.Lifetime = NumberRange.new(0.25, 0.45)
+		particles.Speed = NumberRange.new(4, 8)
+		particles.SpreadAngle = Vector2.new(180, 180)
+		particles.Parent = effectsFolder
+	end
+	if not effectsFolder:FindFirstChild("MiningImpactSound") then
+		local sound = Instance.new("Sound")
+		sound.Name = "MiningImpactSound"
+		sound.SoundId = "rbxassetid://12221976"
+		sound.Volume = 0.35
+		sound.RollOffMaxDistance = 45
+		sound.Parent = effectsFolder
+	end
 
 	-- 商品模型由每位玩家的 LocalScript 依目錄載入到高空預覽區，避免多人同時切換商品時互相影響。
 end
@@ -603,7 +664,7 @@ teleportEvent.OnServerEvent:Connect(function(player)
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if root then
-		root.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 7, 0))
+		root.CFrame = CFrame.new(getWorldOrigin() + Vector3.new(0, 7, 0))
 	end
 end)
 
@@ -616,9 +677,7 @@ local function triggerExplosion(player, centerPos, radius)
 		return
 	end
 
-	local cx = math.floor((centerPos.X + BLOCK_SIZE / 2) / BLOCK_SIZE)
-	local cy = math.floor((centerPos.Y + BLOCK_SIZE / 2) / BLOCK_SIZE)
-	local cz = math.floor((centerPos.Z + BLOCK_SIZE / 2) / BLOCK_SIZE)
+	local cx, cy, cz = blockFromWorld(centerPos)
 
 	local earnedSand = 0
 	local earnedCoins = 0
@@ -729,9 +788,8 @@ local function getBlockData(bx, by, bz)
 	end
 
 	-- 精準控制安全區，不生成方塊避免卡住商店。
-	local realX = bx * BLOCK_SIZE
-	local realZ = bz * BLOCK_SIZE
-	if realX >= -20 and realX <= 20 and realZ >= -40 and realZ <= -10 and by >= -2 then
+	local relativeToSteel = Vector3.new(bx * BLOCK_SIZE, by * BLOCK_SIZE, bz * BLOCK_SIZE)
+	if relativeToSteel.X >= -20 and relativeToSteel.X <= 20 and relativeToSteel.Z >= -15 and relativeToSteel.Z <= 15 and by >= -2 then
 		return false
 	end
 
@@ -770,7 +828,7 @@ local function instanceBlock(bx, by, bz)
 	local part = Instance.new("Part")
 	part.Name = "Block"
 	part.Size = Vector3.new(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
-	part.Position = Vector3.new(bx * BLOCK_SIZE, by * BLOCK_SIZE, bz * BLOCK_SIZE)
+	part.Position = worldFromBlock(bx, by, bz)
 	part.Anchored = true
 	part.Material = (blockType == 1) and Enum.Material.WoodPlanks or Enum.Material.Sand
 	part.Parent = blockModel
@@ -827,8 +885,8 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		projectile.Position = startPosition
 		projectile.Parent = Workspace
 
-		local flightTime = 0.55
-		local apexLift = math.clamp((targetPosition - startPosition).Magnitude * 0.08, 2, 6)
+		local flightTime = BOMB_THROW_FLIGHT_TIME
+		local apexLift = math.clamp((targetPosition - startPosition).Magnitude * 0.12, 3, 9)
 		task.spawn(function()
 			local steps = 18
 			for step = 1, steps do
@@ -855,9 +913,7 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		return
 	end
 
-	local bx = math.floor((targetPart.Position.X + BLOCK_SIZE / 2) / BLOCK_SIZE)
-	local by = math.floor((targetPart.Position.Y + BLOCK_SIZE / 2) / BLOCK_SIZE)
-	local bz = math.floor((targetPart.Position.Z + BLOCK_SIZE / 2) / BLOCK_SIZE)
+	local bx, by, bz = blockFromWorld(targetPart.Position)
 	local key = bx .. "_" .. by .. "_" .. bz
 
 	local blockType = worldData[key]
@@ -876,6 +932,26 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	local equippedTool = player.Character and player.Character:FindFirstChildOfClass("Tool")
 	local power = (equippedTool and equippedTool:GetAttribute("Strength")) or 1
 	blockHealthData[key] -= power * elapsed
+
+	local miningEffects = ReplicatedStorage:FindFirstChild("MiningAssets") and ReplicatedStorage.MiningAssets:FindFirstChild("MiningEffects")
+	local particleTemplate = miningEffects and miningEffects:FindFirstChild("IonMiningParticles")
+	if particleTemplate then
+		local particles = particleTemplate:Clone()
+		particles.Parent = targetPart
+		particles:Emit(14)
+		task.delay(1, function()
+			particles:Destroy()
+		end)
+	end
+	local soundTemplate = miningEffects and miningEffects:FindFirstChild("MiningImpactSound")
+	if soundTemplate then
+		local sound = soundTemplate:Clone()
+		sound.Parent = targetPart
+		sound:Play()
+		sound.Ended:Connect(function()
+			sound:Destroy()
+		end)
+	end
 
 	miningEvent:FireClient(player, targetPart, blockHealthData[key], maxHealth)
 
@@ -937,9 +1013,7 @@ local function updateWorldForPlayer(player)
 		return
 	end
 
-	local pBx = math.floor((root.Position.X + BLOCK_SIZE / 2) / BLOCK_SIZE)
-	local pBy = math.floor((root.Position.Y + BLOCK_SIZE / 2) / BLOCK_SIZE)
-	local pBz = math.floor((root.Position.Z + BLOCK_SIZE / 2) / BLOCK_SIZE)
+	local pBx, pBy, pBz = blockFromWorld(root.Position)
 
 	for x = -CHUNK_RADIUS_XZ, CHUNK_RADIUS_XZ do
 		for y = -CHUNK_RADIUS_Y, CHUNK_RADIUS_Y do

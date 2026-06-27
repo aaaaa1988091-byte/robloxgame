@@ -15,10 +15,14 @@ local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
 local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
 local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefreshTime")
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "MiningHud"
-gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
+local playerGui = player:WaitForChild("PlayerGui")
+local gui = playerGui:FindFirstChild("MiningHud")
+if not gui then
+	gui = Instance.new("ScreenGui")
+	gui.Name = "MiningHud"
+	gui.ResetOnSpawn = false
+	gui.Parent = playerGui
+end
 
 local function addCorner(instance, radius)
 	local corner = Instance.new("UICorner")
@@ -27,9 +31,22 @@ local function addCorner(instance, radius)
 	return corner
 end
 
+local function getOrCreateChild(parent, className, name)
+	local existing = parent:FindFirstChild(name)
+	if existing and existing.ClassName == className then
+		return existing, false
+	end
+	local created = Instance.new(className)
+	created.Name = name
+	created.Parent = parent
+	return created, true
+end
+
 local function makeButton(name, text, size, position, parent)
-	local button = Instance.new("TextButton")
-	button.Name = name
+	local button, created = getOrCreateChild(parent, "TextButton", name)
+	if not created then
+		return button
+	end
 	button.Text = text
 	button.Size = size
 	button.Position = position
@@ -48,8 +65,8 @@ homeButton.MouseButton1Click:Connect(function()
 	teleportEvent:FireServer()
 end)
 
-local infoLabel = Instance.new("TextLabel")
-infoLabel.Name = "WorldInfo"
+local infoLabel, infoCreated = getOrCreateChild(gui, "TextLabel", "WorldInfo")
+if infoCreated then
 infoLabel.Size = UDim2.fromOffset(260, 58)
 infoLabel.Position = UDim2.fromOffset(16, 16)
 infoLabel.BackgroundTransparency = 0.25
@@ -59,6 +76,7 @@ infoLabel.TextWrapped = true
 infoLabel.TextScaled = true
 infoLabel.Parent = gui
 addCorner(infoLabel, 12)
+end
 
 local fullBackpackButton = makeButton("FullBackpackReturnButton", "背包已滿！返回商城", UDim2.fromOffset(260, 58), UDim2.new(0.5, -130, 0.52, 0), gui)
 fullBackpackButton.BackgroundColor3 = Color3.fromRGB(170, 80, 35)
@@ -67,17 +85,18 @@ fullBackpackButton.MouseButton1Click:Connect(function()
 	teleportEvent:FireServer()
 end)
 
-local shopFrame = Instance.new("Frame")
-shopFrame.Name = "ShopFrame"
+local shopFrame, shopFrameCreated = getOrCreateChild(gui, "Frame", "ShopFrame")
+if shopFrameCreated then
 shopFrame.Size = UDim2.fromOffset(380, 240)
 shopFrame.Position = UDim2.new(0.5, -190, 1, -260)
 shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 shopFrame.Visible = false
 shopFrame.Parent = gui
 addCorner(shopFrame, 16)
+end
 
-local title = Instance.new("TextLabel")
-title.Name = "Title"
+local title, titleCreated = getOrCreateChild(shopFrame, "TextLabel", "Title")
+if titleCreated then
 title.Text = "礦工棚子商店"
 title.Size = UDim2.new(1, -48, 0, 44)
 title.Position = UDim2.fromOffset(8, 8)
@@ -85,6 +104,7 @@ title.BackgroundTransparency = 1
 title.TextColor3 = Color3.fromRGB(255, 235, 190)
 title.TextScaled = true
 title.Parent = shopFrame
+end
 
 local closeShop
 
@@ -103,9 +123,12 @@ local previousCameraType = nil
 local previousCameraSubject = nil
 local previousCameraCFrame = nil
 
-local localPreviewFolder = Instance.new("Folder")
-localPreviewFolder.Name = "LocalShopPreviewModels"
-localPreviewFolder.Parent = Workspace
+local localPreviewFolder = Workspace:FindFirstChild("LocalShopPreviewModels")
+if not localPreviewFolder then
+	localPreviewFolder = Instance.new("Folder")
+	localPreviewFolder.Name = "LocalShopPreviewModels"
+	localPreviewFolder.Parent = Workspace
+end
 
 local function createLocalPreviewModel(item, index)
 	local modelData = item.model or {}
@@ -168,8 +191,8 @@ for index, item in ipairs(shopCatalog) do
 	createLocalPreviewModel(item, index)
 end
 
-local descriptionLabel = Instance.new("TextLabel")
-descriptionLabel.Name = "Description"
+local descriptionLabel, descriptionCreated = getOrCreateChild(shopFrame, "TextLabel", "Description")
+if descriptionCreated then
 descriptionLabel.Size = UDim2.new(1, -32, 0, 76)
 descriptionLabel.Position = UDim2.fromOffset(16, 56)
 descriptionLabel.BackgroundTransparency = 0.25
@@ -179,6 +202,7 @@ descriptionLabel.TextWrapped = true
 descriptionLabel.TextScaled = true
 descriptionLabel.Parent = shopFrame
 addCorner(descriptionLabel, 12)
+end
 
 local previousButton = makeButton("PreviousItem", "◀ 上一個", UDim2.fromOffset(110, 42), UDim2.fromOffset(16, 150), shopFrame)
 previousButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
@@ -271,43 +295,65 @@ end)
 
 updateShopSelection()
 
-local progressFrame = Instance.new("Frame")
-progressFrame.Name = "MiningProgress"
+local progressFrame, progressFrameCreated = getOrCreateChild(gui, "Frame", "MiningProgress")
+if progressFrameCreated then
 progressFrame.Size = UDim2.fromOffset(220, 20)
 progressFrame.Position = UDim2.new(0.5, -110, 0.72, 0)
 progressFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 progressFrame.Visible = false
 progressFrame.Parent = gui
 addCorner(progressFrame, 8)
+end
 
-local progressBar = Instance.new("Frame")
-progressBar.Name = "Bar"
+local progressBar, progressBarCreated = getOrCreateChild(progressFrame, "Frame", "Bar")
+if progressBarCreated then
 progressBar.Size = UDim2.fromScale(1, 1)
 progressBar.BackgroundColor3 = Color3.fromRGB(252, 203, 96)
 progressBar.Parent = progressFrame
 addCorner(progressBar, 8)
+end
 
-local blockProgressBillboard = Instance.new("BillboardGui")
-blockProgressBillboard.Name = "BlockMiningProgress"
-blockProgressBillboard.Size = UDim2.fromOffset(120, 14)
-blockProgressBillboard.StudsOffset = Vector3.new(0, 3, 0)
-blockProgressBillboard.AlwaysOnTop = true
-blockProgressBillboard.Enabled = false
-blockProgressBillboard.Parent = gui
+local activeSurfaceProgress = nil
 
-local blockProgressBack = Instance.new("Frame")
-blockProgressBack.Name = "Back"
-blockProgressBack.Size = UDim2.fromScale(1, 1)
-blockProgressBack.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-blockProgressBack.Parent = blockProgressBillboard
-addCorner(blockProgressBack, 6)
+local function clearSurfaceProgress()
+	if activeSurfaceProgress then
+		activeSurfaceProgress:Destroy()
+		activeSurfaceProgress = nil
+	end
+end
 
-local blockProgressBar = Instance.new("Frame")
-blockProgressBar.Name = "Bar"
-blockProgressBar.Size = UDim2.fromScale(1, 1)
-blockProgressBar.BackgroundColor3 = Color3.fromRGB(255, 210, 90)
-blockProgressBar.Parent = blockProgressBack
-addCorner(blockProgressBar, 6)
+local function showSurfaceProgress(targetPart, percentRemaining)
+	clearSurfaceProgress()
+	if not targetPart then
+		return
+	end
+	local surfaceGui = Instance.new("SurfaceGui")
+	surfaceGui.Name = "MiningProgressSurface"
+	surfaceGui.Face = Enum.NormalId.Top
+	surfaceGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	surfaceGui.PixelsPerStud = 40
+	surfaceGui.LightInfluence = 0
+	surfaceGui.Adornee = targetPart
+	surfaceGui.Parent = targetPart
+
+	local back = Instance.new("Frame")
+	back.Name = "Back"
+	back.AnchorPoint = Vector2.new(0.5, 0.5)
+	back.Position = UDim2.fromScale(0.5, 0.5)
+	back.Size = UDim2.fromScale(0.72, 0.16)
+	back.BackgroundColor3 = Color3.fromRGB(25, 20, 15)
+	back.BackgroundTransparency = 0.15
+	back.Parent = surfaceGui
+	addCorner(back, 6)
+
+	local bar = Instance.new("Frame")
+	bar.Name = "Bar"
+	bar.Size = UDim2.fromScale(percentRemaining, 1)
+	bar.BackgroundColor3 = Color3.fromRGB(255, 210, 90)
+	bar.Parent = back
+	addCorner(bar, 6)
+	activeSurfaceProgress = surfaceGui
+end
 
 local selectionBox = Instance.new("SelectionBox")
 selectionBox.Name = "TargetBlockHighlight"
@@ -317,6 +363,53 @@ selectionBox.SurfaceTransparency = 1
 selectionBox.Parent = gui
 
 local isMining = false
+local pendingBombInput = nil
+local bombTrajectoryParts = {}
+local LONG_PRESS_SECONDS = 0.25
+local THROW_ARC_STEPS = 18
+
+local function equippedBombTool()
+	local character = player.Character
+	local tool = character and character:FindFirstChildOfClass("Tool")
+	if tool and tool:GetAttribute("BombCountName") then
+		return tool
+	end
+	return nil
+end
+
+local function clearBombTrajectory()
+	for _, part in ipairs(bombTrajectoryParts) do
+		part:Destroy()
+	end
+	table.clear(bombTrajectoryParts)
+end
+
+local function drawBombTrajectory(targetPart)
+	clearBombTrajectory()
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not targetPart then
+		return
+	end
+	local startPosition = root.Position + Vector3.new(0, 2, 0)
+	local targetPosition = targetPart.Position
+	local apexLift = math.clamp((targetPosition - startPosition).Magnitude * 0.12, 3, 9)
+	for step = 1, THROW_ARC_STEPS do
+		local alpha = step / THROW_ARC_STEPS
+		local marker = Instance.new("Part")
+		marker.Name = "BombTrajectoryMarker"
+		marker.Shape = Enum.PartType.Ball
+		marker.Size = Vector3.new(0.22, 0.22, 0.22)
+		marker.Material = Enum.Material.Neon
+		marker.Color = Color3.fromRGB(255, 185, 60)
+		marker.Transparency = 0.15 + alpha * 0.45
+		marker.Anchored = true
+		marker.CanCollide = false
+		marker.Position = startPosition:Lerp(targetPosition, alpha) + Vector3.new(0, math.sin(math.pi * alpha) * apexLift, 0)
+		marker.Parent = Workspace
+		table.insert(bombTrajectoryParts, marker)
+	end
+end
 
 local function getMineableTarget()
 	local target = mouse.Target
@@ -426,7 +519,16 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		local tool = character and character:FindFirstChildOfClass("Tool")
 		local target = getMineableTarget()
 		updateHighlight(target)
-		if target then
+		if tool and tool:GetAttribute("BombCountName") then
+			pendingBombInput = input
+			task.spawn(function()
+				task.wait(LONG_PRESS_SECONDS)
+				while pendingBombInput == input and equippedBombTool() do
+					drawBombTrajectory(getMineableTarget())
+					task.wait(0.08)
+				end
+			end)
+		elseif target then
 			miningEvent:FireServer(target)
 			task.spawn(playMiningSwing)
 		end
@@ -450,19 +552,25 @@ end)
 UserInputService.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 		isMining = false
+		if pendingBombInput then
+			local target = getMineableTarget()
+			if equippedBombTool() and target then
+				miningEvent:FireServer(target)
+			end
+			pendingBombInput = nil
+			clearBombTrajectory()
+		end
 	end
 end)
 
 miningEvent.OnClientEvent:Connect(function(targetPart, currentHealth, maxHealth)
 	if currentHealth <= 0 or maxHealth <= 0 then
 		progressFrame.Visible = false
-		blockProgressBillboard.Enabled = false
+		clearSurfaceProgress()
 		return
 	end
 	local percentRemaining = math.clamp(currentHealth / maxHealth, 0, 1)
 	progressBar.Size = UDim2.fromScale(percentRemaining, 1)
 	progressFrame.Visible = true
-	blockProgressBillboard.Adornee = targetPart
-	blockProgressBar.Size = UDim2.fromScale(percentRemaining, 1)
-	blockProgressBillboard.Enabled = true
+	showSurfaceProgress(targetPart, percentRemaining)
 end)
