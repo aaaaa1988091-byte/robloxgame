@@ -64,9 +64,6 @@ end
 
 local function makeButton(name, text, size, position, parent)
 	local button, created = getOrCreateChild(parent, "TextButton", name)
-	if not created then
-		return button
-	end
 	button.Text = text
 	button.Size = size
 	button.Position = position
@@ -74,9 +71,11 @@ local function makeButton(name, text, size, position, parent)
 	button.TextColor3 = Color3.fromRGB(255, 255, 255)
 	button.TextScaled = true
 	button.Parent = parent
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 10)
-	corner.Parent = button
+	if created then
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 10)
+		corner.Parent = button
+	end
 	return button
 end
 
@@ -110,16 +109,16 @@ if shopFrameCreated then
 	addCorner(shopFrame, 16)
 end
 shopFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-shopFrame.Size = UDim2.fromOffset(760, 520)
-shopFrame.Position = UDim2.fromScale(0.5, 0.5)
+shopFrame.Size = UDim2.fromOffset(620, 180)
+shopFrame.Position = UDim2.new(0.5, 0, 1, -110)
 shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 shopFrame.Visible = false
 shopFrame.Parent = gui
 
 local title, titleCreated = getOrCreateChild(shopFrame, "TextLabel", "Title")
 title.Text = "礦工棚子商店"
-title.Size = UDim2.new(1, -64, 0, 46)
-title.Position = UDim2.fromOffset(16, 10)
+title.Size = UDim2.new(1, -64, 0, 36)
+title.Position = UDim2.fromOffset(16, 8)
 title.BackgroundTransparency = 1
 title.TextColor3 = Color3.fromRGB(255, 235, 190)
 title.TextScaled = true
@@ -245,8 +244,8 @@ local descriptionLabel, descriptionCreated = getOrCreateChild(shopFrame, "TextLa
 if descriptionCreated then
 	addCorner(descriptionLabel, 12)
 end
-descriptionLabel.Size = UDim2.new(1, -40, 0, 70)
-descriptionLabel.Position = UDim2.fromOffset(20, 350)
+descriptionLabel.Size = UDim2.new(1, -40, 0, 56)
+descriptionLabel.Position = UDim2.fromOffset(20, 48)
 descriptionLabel.BackgroundTransparency = 0.25
 descriptionLabel.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
 descriptionLabel.TextColor3 = Color3.fromRGB(255, 235, 190)
@@ -254,23 +253,13 @@ descriptionLabel.TextWrapped = true
 descriptionLabel.TextScaled = true
 descriptionLabel.Parent = shopFrame
 
-local carousel, carouselCreated = getOrCreateChild(shopFrame, "Frame", "ItemCarousel")
-carousel.Size = UDim2.new(1, -40, 0, 260)
-carousel.Position = UDim2.fromOffset(20, 78)
-carousel.BackgroundColor3 = Color3.fromRGB(38, 25, 15)
-carousel.BackgroundTransparency = 0.05
-carousel.ClipsDescendants = true
-if carouselCreated then
-	addCorner(carousel, 18)
-end
-
-local previousButton = makeButton("PreviousItem", "◀", UDim2.fromOffset(58, 48), UDim2.fromOffset(24, 438), shopFrame)
+local previousButton = makeButton("PreviousItem", "◀ 上一個", UDim2.fromOffset(120, 46), UDim2.fromOffset(20, 118), shopFrame)
 previousButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
 
-local buyButton = makeButton("BuySelected", "購買 / 使用", UDim2.fromOffset(560, 48), UDim2.fromOffset(100, 438), shopFrame)
+local buyButton = makeButton("BuySelected", "購買 / 使用", UDim2.fromOffset(320, 46), UDim2.fromOffset(150, 118), shopFrame)
 buyButton.BackgroundColor3 = Color3.fromRGB(35, 95, 55)
 
-local nextButton = makeButton("NextItem", "▶", UDim2.fromOffset(58, 48), UDim2.fromOffset(678, 438), shopFrame)
+local nextButton = makeButton("NextItem", "下一個 ▶", UDim2.fromOffset(120, 46), UDim2.fromOffset(480, 118), shopFrame)
 nextButton.BackgroundColor3 = Color3.fromRGB(92, 62, 34)
 
 local function getShopWorld()
@@ -278,14 +267,21 @@ local function getShopWorld()
 end
 
 local shopOpenCount = 0
-local carouselCards = {}
+local shopPreviewScene = Workspace:FindFirstChild("LocalShop3DPurchaseScene")
+if not shopPreviewScene then
+	shopPreviewScene = Instance.new("Folder")
+	shopPreviewScene.Name = "LocalShop3DPurchaseScene"
+	shopPreviewScene.Parent = Workspace
+end
+
 local slotLayout = {
-	previous = { position = UDim2.fromScale(0.18, 0.54), size = UDim2.fromOffset(190, 185), transparency = 0.18 },
-	current = { position = UDim2.fromScale(0.5, 0.5), size = UDim2.fromOffset(270, 235), transparency = 0 },
-	next = { position = UDim2.fromScale(0.82, 0.54), size = UDim2.fromOffset(190, 185), transparency = 0.18 },
-	leftOut = { position = UDim2.fromScale(-0.18, 0.58), size = UDim2.fromOffset(160, 155), transparency = 1 },
-	rightOut = { position = UDim2.fromScale(1.18, 0.58), size = UDim2.fromOffset(160, 155), transparency = 1 },
+	previous = { cframe = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(-7.5, 1.2, 0)), scale = 0.72, platform = Vector3.new(4.8, 0.45, 3.4), transparency = 0.22 },
+	current = { cframe = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 1.45, 0)), scale = 1.12, platform = Vector3.new(6.4, 0.55, 4.4), transparency = 0 },
+	next = { cframe = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(7.5, 1.2, 0)), scale = 0.72, platform = Vector3.new(4.8, 0.45, 3.4), transparency = 0.22 },
+	leftOut = { cframe = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(-15, 0.9, 0)), scale = 0.55, platform = Vector3.new(3.8, 0.35, 2.8), transparency = 1 },
+	rightOut = { cframe = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(15, 0.9, 0)), scale = 0.55, platform = Vector3.new(3.8, 0.35, 2.8), transparency = 1 },
 }
+local activeDisplays = {}
 
 local function wrapIndex(index)
 	if #shopCatalog == 0 then
@@ -294,29 +290,22 @@ local function wrapIndex(index)
 	return ((index - 1) % #shopCatalog) + 1
 end
 
-local function clearCarouselCards()
-	for _, card in ipairs(carouselCards) do
-		if card and card.Parent then
-			card:Destroy()
+local function clear3DDisplays()
+	for _, display in ipairs(activeDisplays) do
+		if display.model and display.model.Parent then
+			display.model:Destroy()
 		end
 	end
-	table.clear(carouselCards)
+	table.clear(activeDisplays)
 end
 
-local function fitViewportModel(model)
-	local _, size = model:GetBoundingBox()
-	local maxSize = math.max(size.X, size.Y, size.Z, 1)
-	model:PivotTo(CFrame.new(0, math.max(1.4, size.Y / 2 + 0.35), 0) * CFrame.Angles(0, math.rad(25), 0))
-	return maxSize
-end
-
-local function clonePreviewForViewport(item)
+local function clonePreviewModel(item)
 	local source = localPreviewFolder:FindFirstChild("LocalPreview_" .. item.id)
 	local clone = source and source:Clone()
 	if not clone then
 		return nil
 	end
-	clone.Name = "ViewportItem"
+	clone.Name = "3DItem_" .. item.id
 	for _, descendant in ipairs(clone:GetDescendants()) do
 		if descendant:IsA("BasePart") then
 			descendant.Anchored = true
@@ -327,133 +316,128 @@ local function clonePreviewForViewport(item)
 	return clone
 end
 
-local function createDisplayCard(index, layoutKey)
+local function pivotItemAbovePlatform(itemModel, platform)
+	if not itemModel then
+		return
+	end
+	local _, size = itemModel:GetBoundingBox()
+	itemModel:PivotTo(platform.CFrame * CFrame.new(0, platform.Size.Y / 2 + math.max(size.Y / 2, 0.8) + 0.2, 0) * CFrame.Angles(0, math.rad(25), 0))
+end
+
+local function create3DDisplay(index, layoutKey)
 	local item = shopCatalog[wrapIndex(index)]
 	if not item then
 		return nil
 	end
 	local layout = slotLayout[layoutKey]
-	local card = Instance.new("Frame")
-	card.Name = "ShopDisplay_" .. layoutKey
-	card.AnchorPoint = Vector2.new(0.5, 0.5)
-	card.Position = layout.position
-	card.Size = layout.size
-	card.BackgroundTransparency = 1
-	card.Parent = carousel
-
-	local viewport = Instance.new("ViewportFrame")
-	viewport.Name = "ModelViewport"
-	viewport.Size = UDim2.fromScale(1, 1)
-	viewport.BackgroundTransparency = 1
-	viewport.ImageTransparency = layout.transparency
-	viewport.Ambient = Color3.fromRGB(210, 185, 145)
-	viewport.LightColor = Color3.fromRGB(255, 236, 190)
-	viewport.LightDirection = Vector3.new(-0.35, -1, -0.55)
-	viewport.Parent = card
-
-	local world = Instance.new("WorldModel")
-	world.Parent = viewport
+	local displayModel = Instance.new("Model")
+	displayModel.Name = "Shop3DDisplay_" .. layoutKey .. "_" .. item.id
+	displayModel.Parent = shopPreviewScene
 
 	local platform = Instance.new("Part")
 	platform.Name = "WoodDisplayPlatform"
-	platform.Size = Vector3.new(5.5, 0.45, 3.8)
-	platform.Position = Vector3.new(0, 0.2, 0)
+	platform.Size = layout.platform
 	platform.Material = Enum.Material.WoodPlanks
 	platform.Color = Color3.fromRGB(118, 74, 34)
 	platform.Anchored = true
-	platform.Parent = world
+	platform.CanCollide = false
+	platform.Transparency = layout.transparency
+	platform.CFrame = layout.cframe
+	platform.Parent = displayModel
+	displayModel.PrimaryPart = platform
 
-	local itemModel = clonePreviewForViewport(item)
-	local maxSize = 4
+	local itemModel = clonePreviewModel(item)
 	if itemModel then
-		itemModel.Parent = world
-		maxSize = fitViewportModel(itemModel)
+		itemModel.Parent = displayModel
+		pcall(function() itemModel:ScaleTo(layout.scale) end)
+		pivotItemAbovePlatform(itemModel, platform)
+		for _, descendant in ipairs(itemModel:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant.Transparency = layout.transparency
+			end
+		end
 	end
 
-	local camera = Instance.new("Camera")
-	camera.CFrame = CFrame.lookAt(Vector3.new(0, math.max(3.2, maxSize * 0.7), math.max(7, maxSize * 2.2)), Vector3.new(0, math.max(1.6, maxSize * 0.35), 0))
-	camera.Parent = viewport
-	viewport.CurrentCamera = camera
-
-	local label = Instance.new("TextLabel")
-	label.Name = "ItemName"
-	label.AnchorPoint = Vector2.new(0.5, 1)
-	label.Position = UDim2.fromScale(0.5, 1)
-	label.Size = UDim2.new(1, -12, 0, 34)
-	label.BackgroundTransparency = 0.25
-	label.BackgroundColor3 = Color3.fromRGB(55, 34, 18)
-	label.TextColor3 = Color3.fromRGB(255, 236, 196)
-	label.TextScaled = true
-	label.Text = item.name
-	label.Parent = card
-	addCorner(label, 10)
-
-	table.insert(carouselCards, card)
-	return card
+	local display = { model = displayModel, platform = platform, itemModel = itemModel, layoutKey = layoutKey }
+	table.insert(activeDisplays, display)
+	return display
 end
 
-local function tweenCard(card, layoutKey)
-	if not card then
+local function tween3DDisplay(display, layoutKey)
+	if not display then
 		return nil
 	end
 	local layout = slotLayout[layoutKey]
-	local viewport = card:FindFirstChild("ModelViewport")
-	if viewport then
-		TweenService:Create(viewport, TweenInfo.new(SHOP_SLOT_TWEEN, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { ImageTransparency = layout.transparency }):Play()
+	local startPivot = display.model:GetPivot()
+	local pivotValue = Instance.new("CFrameValue")
+	pivotValue.Value = startPivot
+	pivotValue:GetPropertyChangedSignal("Value"):Connect(function()
+		display.model:PivotTo(pivotValue.Value)
+	end)
+	local pivotTween = TweenService:Create(pivotValue, TweenInfo.new(SHOP_SLOT_TWEEN, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Value = layout.cframe })
+	local sizeTween = TweenService:Create(display.platform, TweenInfo.new(SHOP_SLOT_TWEEN, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = layout.platform, Transparency = layout.transparency })
+	for _, descendant in ipairs(display.model:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant ~= display.platform then
+			TweenService:Create(descendant, TweenInfo.new(SHOP_SLOT_TWEEN, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = layout.transparency }):Play()
+		end
 	end
-	local tween = TweenService:Create(card, TweenInfo.new(SHOP_SLOT_TWEEN, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		Position = layout.position,
-		Size = layout.size,
-	})
-	tween:Play()
-	return tween
+	pivotTween:Play()
+	sizeTween:Play()
+	pivotTween.Completed:Connect(function()
+		pivotValue:Destroy()
+		if display.itemModel then
+			pcall(function() display.itemModel:ScaleTo(layout.scale) end)
+			pivotItemAbovePlatform(display.itemModel, display.platform)
+		end
+	end)
+	return pivotTween
 end
 
-local function renderCarousel(direction)
+local function render3DShop(direction)
 	if #shopCatalog == 0 then
-		clearCarouselCards()
+		clear3DDisplays()
 		return
 	end
 	if not direction then
-		clearCarouselCards()
-		createDisplayCard(selectedShopIndex - 1, "previous")
-		createDisplayCard(selectedShopIndex, "current")
-		createDisplayCard(selectedShopIndex + 1, "next")
+		clear3DDisplays()
+		create3DDisplay(selectedShopIndex - 1, "previous")
+		create3DDisplay(selectedShopIndex, "current")
+		create3DDisplay(selectedShopIndex + 1, "next")
 		return
 	end
 
 	local oldSelected = direction == "next" and wrapIndex(selectedShopIndex - 1) or wrapIndex(selectedShopIndex + 1)
-	clearCarouselCards()
+	clear3DDisplays()
 	if direction == "next" then
-		local leaving = createDisplayCard(oldSelected - 1, "previous")
-		local oldCurrent = createDisplayCard(oldSelected, "current")
-		local newCurrent = createDisplayCard(selectedShopIndex, "next")
-		local entering = createDisplayCard(selectedShopIndex + 1, "rightOut")
-		tweenCard(leaving, "leftOut")
-		tweenCard(oldCurrent, "previous")
-		tweenCard(newCurrent, "current")
-		local tween = tweenCard(entering, "next")
+		local leaving = create3DDisplay(oldSelected - 1, "previous")
+		local oldCurrent = create3DDisplay(oldSelected, "current")
+		local newCurrent = create3DDisplay(selectedShopIndex, "next")
+		local entering = create3DDisplay(selectedShopIndex + 1, "rightOut")
+		tween3DDisplay(leaving, "leftOut")
+		tween3DDisplay(oldCurrent, "previous")
+		tween3DDisplay(newCurrent, "current")
+		local tween = tween3DDisplay(entering, "next")
 		if tween then
 			local connection
 			connection = tween.Completed:Connect(function()
 				if connection then connection:Disconnect() end
-				renderCarousel(nil)
+				render3DShop(nil)
 			end)
 		end
 	else
-		local entering = createDisplayCard(selectedShopIndex - 1, "leftOut")
-		local newCurrent = createDisplayCard(selectedShopIndex, "previous")
-		local oldCurrent = createDisplayCard(oldSelected, "current")
-		local leaving = createDisplayCard(oldSelected + 1, "next")
-		tweenCard(entering, "previous")
-		tweenCard(newCurrent, "current")
-		tweenCard(oldCurrent, "next")
-		local tween = tweenCard(leaving, "rightOut")
+		local entering = create3DDisplay(selectedShopIndex - 1, "leftOut")
+		local newCurrent = create3DDisplay(selectedShopIndex, "previous")
+		local oldCurrent = create3DDisplay(oldSelected, "current")
+		local leaving = create3DDisplay(oldSelected + 1, "next")
+		tween3DDisplay(entering, "previous")
+		tween3DDisplay(newCurrent, "current")
+		tween3DDisplay(oldCurrent, "next")
+		local tween = tween3DDisplay(leaving, "rightOut")
 		if tween then
 			local connection
 			connection = tween.Completed:Connect(function()
 				if connection then connection:Disconnect() end
-				renderCarousel(nil)
+				render3DShop(nil)
 			end)
 		end
 	end
@@ -476,7 +460,7 @@ local function updateShopSelection(direction)
 	descriptionLabel.Text = item.description
 	buyButton.Text = (item.action == "Sell") and "出售沙子" or "購買 / 使用"
 	setPreviewVisible(selectedShopIndex)
-	renderCarousel(direction)
+	render3DShop(direction)
 end
 
 local function focusShopCamera()
@@ -490,7 +474,7 @@ local function focusShopCamera()
 	previousCameraSubject = camera.CameraSubject
 	previousCameraCFrame = camera.CFrame
 	camera.CameraType = Enum.CameraType.Scriptable
-	camera.CFrame = anchor and anchor.CFrame or CFrame.lookAt(SHOP_PREVIEW_POSITION + Vector3.new(0, 5, 11), SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
+	camera.CFrame = CFrame.lookAt(SHOP_PREVIEW_POSITION + Vector3.new(0, 6, 18), SHOP_PREVIEW_POSITION + Vector3.new(0, 2.4, 0))
 end
 
 local function restoreCamera()
@@ -512,8 +496,8 @@ local function openShop()
 	shopOpenCount += 1
 	refreshCatalogAndPreviews()
 	shopFrame.Visible = true
-	shopFrame.Position = UDim2.fromScale(1.25, 0.5)
-	TweenService:Create(shopFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.fromScale(0.5, 0.5) }):Play()
+	shopFrame.Position = UDim2.new(0.5, 0, 1, 80)
+	TweenService:Create(shopFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, 0, 1, -110) }):Play()
 	focusShopCamera()
 	selectedShopIndex = 1
 	updateShopSelection(nil)
@@ -521,6 +505,7 @@ end
 
 closeShop = function()
 	shopFrame.Visible = false
+	clear3DDisplays()
 	restoreCamera()
 end
 
