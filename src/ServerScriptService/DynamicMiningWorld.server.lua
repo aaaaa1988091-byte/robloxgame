@@ -705,8 +705,9 @@ local function ensureStarterGuiTemplate()
 
 	local shopFrame, shopCreated = getOrCreateChild(gui, "Frame", "ShopFrame")
 	if shopCreated then
-		shopFrame.Size = UDim2.fromOffset(620, 300)
-		shopFrame.Position = UDim2.new(0.5, -310, 1, -324)
+		shopFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+		shopFrame.Size = UDim2.fromOffset(760, 520)
+		shopFrame.Position = UDim2.fromScale(0.5, 0.5)
 		shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
 		shopFrame.Visible = false
 		local corner = Instance.new("UICorner")
@@ -714,15 +715,15 @@ local function ensureStarterGuiTemplate()
 		corner.Parent = shopFrame
 	end
 	configureGuiButton(shopFrame, "CloseButton", "X", UDim2.fromOffset(36, 36), UDim2.new(1, -44, 0, 8))
-	configureGuiButton(shopFrame, "PreviousItem", "◀", UDim2.fromOffset(48, 42), UDim2.fromOffset(16, 238))
-	configureGuiButton(shopFrame, "BuySelected", "購買", UDim2.fromOffset(420, 42), UDim2.fromOffset(100, 238))
-	configureGuiButton(shopFrame, "NextItem", "▶", UDim2.fromOffset(48, 42), UDim2.fromOffset(556, 238))
+	configureGuiButton(shopFrame, "PreviousItem", "◀", UDim2.fromOffset(58, 48), UDim2.fromOffset(24, 438))
+	configureGuiButton(shopFrame, "BuySelected", "購買 / 使用", UDim2.fromOffset(560, 48), UDim2.fromOffset(100, 438))
+	configureGuiButton(shopFrame, "NextItem", "▶", UDim2.fromOffset(58, 48), UDim2.fromOffset(678, 438))
 
 	local title, titleCreated = getOrCreateChild(shopFrame, "TextLabel", "Title")
 	if titleCreated then
 		title.Text = "礦工棚子商店"
-		title.Size = UDim2.new(1, -48, 0, 44)
-		title.Position = UDim2.fromOffset(8, 8)
+		title.Size = UDim2.new(1, -64, 0, 46)
+		title.Position = UDim2.fromOffset(16, 10)
 		title.BackgroundTransparency = 1
 		title.TextColor3 = Color3.fromRGB(255, 235, 190)
 		title.TextScaled = true
@@ -730,8 +731,8 @@ local function ensureStarterGuiTemplate()
 
 	local description, descriptionCreated = getOrCreateChild(shopFrame, "TextLabel", "Description")
 	if descriptionCreated then
-		description.Size = UDim2.new(1, -32, 0, 76)
-		description.Position = UDim2.fromOffset(16, 56)
+		description.Size = UDim2.new(1, -40, 0, 70)
+		description.Position = UDim2.fromOffset(20, 350)
 		description.BackgroundTransparency = 0.25
 		description.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
 		description.TextColor3 = Color3.fromRGB(255, 235, 190)
@@ -819,6 +820,7 @@ local function createShopWorld()
 		shopZone.Transparency = 0.55
 		shopZone.Anchored = true
 		shopZone.CanCollide = false
+		shopZone.CanTouch = true
 	end)
 
 	createPartIfMissing("ShopCounter", function(shopCounter)
