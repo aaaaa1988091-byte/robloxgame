@@ -5,6 +5,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
+local SocialService = game:GetService("SocialService")
 
 local player = Players.LocalPlayer
 if player:GetAttribute("MiningClientInitialized") then
@@ -23,6 +24,10 @@ local shopActionEvent = ReplicatedStorage:WaitForChild("ShopAction")
 local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
 local rewardEmojiEvent = ReplicatedStorage:WaitForChild("RewardEmojiEvent")
 local abilityDraftEvent = ReplicatedStorage:WaitForChild("AbilityDraftEvent")
+local weatherEvent = ReplicatedStorage:WaitForChild("WeatherEvent")
+local potionActionEvent = ReplicatedStorage:WaitForChild("PotionActionEvent")
+local questActionEvent = ReplicatedStorage:WaitForChild("QuestActionEvent")
+local questStateFunction = ReplicatedStorage:WaitForChild("GetQuestState")
 local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
 local shopStateFunction = ReplicatedStorage:WaitForChild("GetShopState")
 local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefreshTime")
@@ -177,6 +182,8 @@ sideMenu.Position = UDim2.fromOffset(16, 210)
 sideMenu.BackgroundTransparency = 1
 sideMenu.Parent = gui
 local featurePanels = {}
+local refreshQuestPanel = function() end
+
 local function makeFeaturePanel(key, titleText, bodyText)
 	local panel = Instance.new("Frame")
 	panel.Name = key .. "Panel"
@@ -197,6 +204,7 @@ local function makeFeaturePanel(key, titleText, bodyText)
 	titleLabel.TextScaled = true
 	titleLabel.Parent = panel
 	local body = Instance.new("TextLabel")
+	body.Name = "Body"
 	body.Size = UDim2.new(1, -34, 1, -70)
 	body.Position = UDim2.fromOffset(17, 58)
 	body.BackgroundTransparency = 1
@@ -223,7 +231,106 @@ for index, item in ipairs({
 			closeShop()
 		end
 		openModal(featurePanels[item[1]], UDim2.fromScale(0.5, 0.5))
+		if item[1] == "quests" then
+			refreshQuestPanel()
+		end
 	end)
+end
+
+local function setPanelBody(key, text)
+	local panel = featurePanels[key]
+	local body = panel and panel:FindFirstChild("Body")
+	if body then body.Text = text end
+	return panel
+end
+
+local invitePanel = setPanelBody("invite", "邀請好友一起挖礦\n成功邀請可保留作為後續獎勵入口。")
+if invitePanel then
+	local inviteButton = makeImageButton("PromptInviteButton", "開啟好友邀請", UDim2.fromOffset(180, 42), UDim2.fromOffset(90, 145), invitePanel, Color3.fromRGB(55, 105, 185))
+	inviteButton.MouseButton1Click:Connect(function()
+		local canInvite = false
+		pcall(function()
+			canInvite = SocialService:CanSendGameInviteAsync(player)
+		end)
+		if canInvite then
+			SocialService:PromptGameInvite(player)
+		else
+			StarterGui:SetCore("SendNotification", { Title = "無法邀請", Text = "目前平台或體驗設定不支援好友邀請。", Duration = 3 })
+		end
+	end)
+end
+
+local potionPanel = setPanelBody("potions", "選擇藥水立即使用：力量提升挖掘、幸運提升寶箱金錢、速度提升移動。")
+if potionPanel then
+	for index, potion in ipairs({
+		{ id = "Strength", text = "力量藥水\n挖掘 +35%" },
+		{ id = "Luck", text = "幸運藥水\n寶箱金錢 +50%" },
+		{ id = "Speed", text = "速度藥水\n移速 +25%" },
+	}) do
+		local useButton = makeImageButton("Use" .. potion.id .. "Potion", potion.text, UDim2.fromOffset(104, 76), UDim2.fromOffset(20 + (index - 1) * 112, 130), potionPanel, Color3.fromRGB(84, 78, 150))
+		useButton.MouseButton1Click:Connect(function()
+			potionActionEvent:FireServer(potion.id)
+		end)
+	end
+end
+
+local robuxPanel = setPanelBody("robux", "商店顯示\n所有商品以圖片按鈕卡片呈現，可在此替換商品圖與價格。")
+if robuxPanel then
+	for index, product in ipairs({ "新手禮包", "VIP 加速", "超值金幣" }) do
+		makeImageButton("PremiumCard" .. index, product .. "\n顯示位", UDim2.fromOffset(104, 76), UDim2.fromOffset(20 + (index - 1) * 112, 130), robuxPanel, Color3.fromRGB(125, 85, 35))
+	end
+end
+
+local questCards = {}
+refreshQuestPanel = function()
+	local questPanel = featurePanels["quests"]
+	if not questPanel then return end
+	local questState = {}
+	pcall(function()
+		questState = questStateFunction:InvokeServer()
+	end)
+	local body = questPanel:FindFirstChild("Body")
+	if body then
+		body.Text = "每日任務會追蹤你挖掉的仙人掌與樹木；完成後可領取藥水。"
+	end
+	for _, card in ipairs(questCards) do
+		card:Destroy()
+	end
+	table.clear(questCards)
+	for index, quest in ipairs(questState or {}) do
+		local card = Instance.new("Frame")
+		card.Name = "QuestCard_" .. tostring(quest.id)
+		card.Size = UDim2.fromOffset(320, 58)
+		card.Position = UDim2.fromOffset(20, 102 + (index - 1) * 64)
+		card.BackgroundColor3 = Color3.fromRGB(42, 40, 62)
+		card.Parent = questPanel
+		addCorner(card, 12)
+		table.insert(questCards, card)
+
+		local progressText = string.format("%s  %d/%d\n獎勵：%s * 1", quest.displayName or quest.id, quest.progress or 0, quest.target or 0, quest.rewardName or "藥水")
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1, -116, 1, -8)
+		label.Position = UDim2.fromOffset(10, 4)
+		label.BackgroundTransparency = 1
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextWrapped = true
+		label.TextScaled = true
+		label.TextColor3 = Color3.fromRGB(245, 245, 255)
+		label.Text = progressText
+		label.Parent = card
+
+		local done = (quest.progress or 0) >= (quest.target or 1)
+		local claimText = quest.claimed and "已領取" or (done and "領取" or "進行中")
+		local claim = makeImageButton("Claim" .. tostring(quest.id), claimText, UDim2.fromOffset(88, 40), UDim2.new(1, -98, 0.5, -20), card, done and Color3.fromRGB(45, 130, 75) or Color3.fromRGB(85, 85, 105))
+		claim.Active = done and not quest.claimed
+		claim.AutoButtonColor = done and not quest.claimed
+		claim.MouseButton1Click:Connect(function()
+			if done and not quest.claimed then
+				questActionEvent:FireServer("Claim", quest.id)
+				task.delay(0.25, refreshQuestPanel)
+			end
+		end)
+	end
 end
 
 local infoLabel, infoCreated = getOrCreateChild(gui, "TextLabel", "WorldInfo")
@@ -382,6 +489,16 @@ local function refreshCatalogAndPreviews()
 end
 
 refreshCatalogAndPreviews()
+
+local shopDetailLabel, shopDetailCreated = getOrCreateChild(shopFrame, "TextLabel", "ShopDetail")
+shopDetailLabel.Size = UDim2.fromOffset(132, 34)
+shopDetailLabel.Position = UDim2.fromOffset(472, 12)
+shopDetailLabel.BackgroundTransparency = 0.35
+shopDetailLabel.BackgroundColor3 = Color3.fromRGB(30, 22, 16)
+shopDetailLabel.TextColor3 = Color3.fromRGB(255, 245, 210)
+shopDetailLabel.TextScaled = true
+shopDetailLabel.Parent = shopFrame
+if shopDetailCreated then addCorner(shopDetailLabel, 10) end
 
 local descriptionLabel, descriptionCreated = getOrCreateChild(shopFrame, "TextLabel", "Description")
 if descriptionCreated then
@@ -601,6 +718,7 @@ local function updateShopSelection(direction)
 	end
 	title.Text = item.name .. ((item.price and item.price > 0) and ("  $" .. item.price) or "")
 	descriptionLabel.Text = item.description
+	shopDetailLabel.Text = string.format("%s｜$%s", item.action or "Item", item.price or 0)
 	local label = buyButton:FindFirstChild("Label")
 	local buttonText = (item.action == "Sell") and "出售沙子" or "購買"
 	if item.action == "BuyTool" and (item.item == "拳頭" or (shopState and shopState.ownedTools and shopState.ownedTools[item.item])) then
@@ -1048,54 +1166,53 @@ abilityFrame.Parent = gui
 registerModal(abilityFrame)
 addCorner(abilityFrame, 18)
 local abilityColors = { green = Color3.fromRGB(80, 190, 95), blue = Color3.fromRGB(75, 145, 255), purple = Color3.fromRGB(175, 90, 255), gold = Color3.fromRGB(255, 205, 65), orange = Color3.fromRGB(255, 125, 35) }
-local abilityPool = {
-	{ name = "炸彈威力 +20%", rarity = "green", weight = 46 }, { name = "力量 +20%", rarity = "green", weight = 46 },
-	{ name = "挖掘範圍 +15%", rarity = "blue", weight = 28 }, { name = "走路速度 +10%", rarity = "blue", weight = 28 },
-	{ name = "七彩霞光", rarity = "purple", weight = 10 }, { name = "散彈", rarity = "purple", weight = 10 }, { name = "雙手", rarity = "purple", weight = 10 },
-	{ name = "運氣佳", rarity = "gold", weight = 3 }, { name = "專注", rarity = "gold", weight = 3 },
-	{ name = "核彈", rarity = "orange", weight = 1 }, { name = "雷射", rarity = "orange", weight = 1 },
-}
-local function rollAbility()
-	local total = 0
-	for _, data in ipairs(abilityPool) do total += data.weight end
-	local roll = math.random() * total
-	for _, data in ipairs(abilityPool) do
-		roll -= data.weight
-		if roll <= 0 then return data end
+local rarityLabels = { green = "綠", blue = "藍", purple = "紫", gold = "金", orange = "橙" }
+local currentAbilityChoices = {}
+
+local function showAbilityDraft(choices, reason)
+	currentAbilityChoices = choices or {}
+	for _, child in ipairs(abilityFrame:GetChildren()) do
+		if child:IsA("ImageButton") or child:IsA("TextButton") or child:IsA("TextLabel") then child:Destroy() end
 	end
-	return abilityPool[1]
-end
-local function showAbilityDraft()
-	for _, child in ipairs(abilityFrame:GetChildren()) do if child:IsA("ImageButton") or child:IsA("TextButton") or child:IsA("TextLabel") then child:Destroy() end end
 	local header = Instance.new("TextLabel")
 	header.Size = UDim2.new(1, -20, 0, 42)
 	header.Position = UDim2.fromOffset(10, 8)
 	header.BackgroundTransparency = 1
-	header.Text = "選擇一張能力卡（相容式加成範本）"
+	header.Text = (reason == "WorldRefresh") and "土地刷新：重新選擇本輪能力" or "每分鐘能力抽選：選擇一張卡"
 	header.TextColor3 = Color3.fromRGB(255,255,255)
 	header.TextScaled = true
 	header.Parent = abilityFrame
-	local close = makeImageButton("AbilityClose", "X", UDim2.fromOffset(42, 36), UDim2.new(1, -52, 0, 10), abilityFrame, Color3.fromRGB(130, 55, 55))
+	local close = makeImageButton("AbilityClose", "稍後", UDim2.fromOffset(70, 36), UDim2.new(1, -80, 0, 10), abilityFrame, Color3.fromRGB(130, 55, 55))
 	close.MouseButton1Click:Connect(function() closeModal(abilityFrame) end)
-	for i = 1, 3 do
-		local data = rollAbility()
-		local card = makeImageButton("AbilityCard" .. i, data.name, UDim2.fromOffset(180, 132), UDim2.fromOffset(30 + (i - 1) * 200, 68), abilityFrame)
+	for i, data in ipairs(currentAbilityChoices) do
+		local cardText = string.format("[%s] %s\n%s", rarityLabels[data.rarity] or data.rarity or "?", data.name or "能力", data.description or "選擇後立即套用。")
+		local card = makeImageButton("AbilityCard" .. i, cardText, UDim2.fromOffset(180, 132), UDim2.fromOffset(30 + (i - 1) * 200, 68), abilityFrame)
 		card.BackgroundColor3 = abilityColors[data.rarity] or Color3.fromRGB(80, 190, 95)
-		card.MouseButton1Click:Connect(function() closeModal(abilityFrame) end)
+		card.MouseButton1Click:Connect(function()
+			abilityDraftEvent:FireServer("Select", data.name)
+			closeModal(abilityFrame)
+		end)
 	end
-	openModal(abilityFrame, UDim2.fromScale(0.5, 0.42))
+	if #currentAbilityChoices > 0 and modalLockValue.Value == 0 then
+		openModal(abilityFrame, UDim2.fromScale(0.5, 0.42))
+	end
 end
-task.spawn(function()
-	while true do
-		task.wait(60)
-		if modalLockValue.Value == 0 then
-			showAbilityDraft()
-		end
+
+abilityDraftEvent.OnClientEvent:Connect(function(messageType, choices, reason)
+	if messageType == "Offer" then
+		showAbilityDraft(choices, reason)
 	end
 end)
-nextWorldRefreshTimeValue.Changed:Connect(function()
-	if modalLockValue.Value == 0 then
-		showAbilityDraft()
+weatherEvent.OnClientEvent:Connect(function(weatherName)
+	if weatherName == "Thunderstorm" then
+		Lighting.ClockTime = 20
+		Lighting.Brightness = 0.85
+		Lighting.FogEnd = 360
+		StarterGui:SetCore("SendNotification", { Title = "雷雨來襲", Text = "落雷會燒焦方塊，偶爾引發隕石衝擊。", Duration = 4 })
+	else
+		Lighting.ClockTime = 16.25
+		Lighting.Brightness = 2.15
+		Lighting.FogEnd = 820
 	end
 end)
 

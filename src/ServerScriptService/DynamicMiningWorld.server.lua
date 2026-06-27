@@ -13,6 +13,7 @@ local CHUNK_RADIUS_XZ = 22
 local CHUNK_RADIUS_Y = 8
 local MAX_DEPTH_BLOCKS = 4000
 local CHEST_CHANCE = 0.02
+local PYRAMID_CHANCE = 0.00035
 local STEEL_FLOOR_SIZE = Vector3.new(10, 1, 10)
 local NOISE_SCALE = 0.075
 local HILL_HEIGHT_BLOCKS = 9
@@ -34,6 +35,9 @@ local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0) -- 高空本地預覽
 local WORLD_SEED = math.random(1, 1000000)
 local lastShopTeleportAt = {}
 local activeBackpackModels = {}
+local playerAbilityState = {}
+local pendingAbilityDrafts = {}
+local currentWeather = "Clear"
 local BOMB_THROW_FLIGHT_TIME = 0.42
 
 -- 寶箱可維護設定：新增等級只要複製一列，調整 id / minDepth / weight / color / health / reward。
@@ -93,6 +97,10 @@ local shopActionEvent = getRemote("RemoteEvent", "ShopAction")
 local miningEvent = getRemote("RemoteEvent", "MiningEvent")
 local rewardEmojiEvent = getRemote("RemoteEvent", "RewardEmojiEvent")
 local abilityDraftEvent = getRemote("RemoteEvent", "AbilityDraftEvent")
+local weatherEvent = getRemote("RemoteEvent", "WeatherEvent")
+local potionActionEvent = getRemote("RemoteEvent", "PotionActionEvent")
+local questActionEvent = getRemote("RemoteEvent", "QuestActionEvent")
+local questStateFunction = getRemote("RemoteFunction", "GetQuestState")
 local shopCatalogFunction = getRemote("RemoteFunction", "GetShopCatalog")
 local shopStateFunction = getRemote("RemoteFunction", "GetShopState")
 
@@ -103,6 +111,86 @@ nextWorldRefreshTimeValue.Parent = ReplicatedStorage
 
 local function sendNotification(player, title, text)
 	sendNotificationEvent:FireClient(player, title, text)
+end
+
+local DAILY_QUEST_DEFINITIONS = {
+	Cactus = { displayName = "挖掘仙人掌", targetMin = 10, targetMax = 20, rewardPotion = "Strength", rewardName = "力量藥水" },
+	Tree = { displayName = "挖掘樹木", targetMin = 10, targetMax = 20, rewardPotion = "Speed", rewardName = "速度藥水" },
+}
+
+local function getOrCreateDailyQuests(player)
+	local quests = player:FindFirstChild("DailyQuests") or Instance.new("Folder")
+	quests.Name = "DailyQuests"
+	quests.Parent = player
+	for questId, definition in pairs(DAILY_QUEST_DEFINITIONS) do
+		local questFolder = quests:FindFirstChild(questId) or Instance.new("Folder")
+		questFolder.Name = questId
+		questFolder.Parent = quests
+		local progress = questFolder:FindFirstChild("Progress") or Instance.new("IntValue")
+		progress.Name = "Progress"
+		progress.Parent = questFolder
+		local target = questFolder:FindFirstChild("Target") or Instance.new("IntValue")
+		target.Name = "Target"
+		target.Parent = questFolder
+		if target.Value <= 0 then target.Value = math.random(definition.targetMin, definition.targetMax) end
+		local claimed = questFolder:FindFirstChild("Claimed") or Instance.new("BoolValue")
+		claimed.Name = "Claimed"
+		claimed.Parent = questFolder
+	end
+	return quests
+end
+
+local function serializeQuestState(player)
+	local quests = getOrCreateDailyQuests(player)
+	local result = {}
+	for questId, definition in pairs(DAILY_QUEST_DEFINITIONS) do
+		local questFolder = quests:FindFirstChild(questId)
+		local progress = questFolder and questFolder:FindFirstChild("Progress")
+		local target = questFolder and questFolder:FindFirstChild("Target")
+		local claimed = questFolder and questFolder:FindFirstChild("Claimed")
+		table.insert(result, {
+			id = questId,
+			displayName = definition.displayName,
+			progress = progress and progress.Value or 0,
+			target = target and target.Value or definition.targetMax,
+			claimed = claimed and claimed.Value or false,
+			rewardPotion = definition.rewardPotion,
+			rewardName = definition.rewardName,
+		})
+	end
+	return result
+end
+
+local function addPotionCount(player, potionName, amount)
+	local potions = player:FindFirstChild("Potions")
+	local count = potions and potions:FindFirstChild(potionName)
+	if count then count.Value += amount end
+end
+
+local function recordQuestProgress(player, questId, amount)
+	local definition = DAILY_QUEST_DEFINITIONS[questId]
+	if not definition then return end
+	local quests = getOrCreateDailyQuests(player)
+	local questFolder = quests:FindFirstChild(questId)
+	local progress = questFolder and questFolder:FindFirstChild("Progress")
+	local target = questFolder and questFolder:FindFirstChild("Target")
+	local claimed = questFolder and questFolder:FindFirstChild("Claimed")
+	if progress and target and claimed and not claimed.Value then
+		progress.Value = math.clamp(progress.Value + (amount or 1), 0, target.Value)
+		if progress.Value >= target.Value then
+			sendNotification(player, "任務完成", definition.displayName .. " 可領取 " .. definition.rewardName .. "。")
+		end
+	end
+end
+
+local function recordPropQuestProgress(player, blockModel)
+	if not blockModel then return end
+	if blockModel:FindFirstChild("Cactus", true) then
+		recordQuestProgress(player, "Cactus", 1)
+	end
+	if blockModel:FindFirstChild("Tree", true) or blockModel:FindFirstChild("Leaves", true) then
+		recordQuestProgress(player, "Tree", 1)
+	end
 end
 
 -- ==================== 1. 玩家數據與工具系統 ====================
@@ -128,6 +216,7 @@ local playerMiningState = {}
 local activePetModels = {}
 local activePetLoops = {}
 local ensureSandPet = function() end
+local offerAbilityDraft = function() end
 
 local function teleportPlayerToSteel(player)
 	local now = os.clock()
@@ -672,6 +761,17 @@ Players.PlayerAdded:Connect(function(player)
 	hasSandPet.Value = false
 	hasSandPet.Parent = player
 
+	local potions = Instance.new("Folder")
+	potions.Name = "Potions"
+	potions.Parent = player
+	for _, potionName in ipairs({ "Strength", "Luck", "Speed" }) do
+		local count = Instance.new("IntValue")
+		count.Name = potionName
+		count.Value = 1
+		count.Parent = potions
+	end
+	local dailyQuests = getOrCreateDailyQuests(player)
+
 	local ownedTools = getOwnedToolsFolder(player)
 	local success, savedData = pcall(function()
 		return PLAYER_DATA_STORE:GetAsync(player.UserId)
@@ -684,6 +784,21 @@ Players.PlayerAdded:Connect(function(player)
 		clusterBombCount.Value = tonumber(savedData.ClusterBombCount) or 0
 		maxSand.Value = tonumber(savedData.MaxSand) or MAX_BACKPACK_CAPPED
 		hasSandPet.Value = savedData.HasSandPet == true
+		if type(savedData.Potions) == "table" then
+			for potionName, count in pairs(savedData.Potions) do
+				if potions:FindFirstChild(potionName) then potions[potionName].Value = tonumber(count) or 0 end
+			end
+		end
+		if type(savedData.DailyQuests) == "table" then
+			for questId, data in pairs(savedData.DailyQuests) do
+				local questFolder = dailyQuests:FindFirstChild(questId)
+				if questFolder then
+					questFolder.Progress.Value = tonumber(data.Progress) or 0
+					questFolder.Target.Value = tonumber(data.Target) or questFolder.Target.Value
+					questFolder.Claimed.Value = data.Claimed == true
+				end
+			end
+		end
 		for _, toolName in ipairs(savedData.OwnedTools or {}) do
 			rememberTool(player, toolName)
 		end
@@ -700,6 +815,9 @@ Players.PlayerAdded:Connect(function(player)
 	end)
 	hasSandPet.Changed:Connect(function()
 		ensureSandPet(player)
+	end)
+	task.delay(8, function()
+		offerAbilityDraft(player, "Join")
 	end)
 end)
 
@@ -758,12 +876,24 @@ local function savePlayerData(player)
 	local ownedTools = player:FindFirstChild("OwnedTools")
 	local maxSand = player:FindFirstChild("MaxSand")
 	local hasSandPet = player:FindFirstChild("HasSandPet")
+	local potions = player:FindFirstChild("Potions")
+	local dailyQuests = player:FindFirstChild("DailyQuests")
 	if not leaderstats or not currentPickaxe or not bombCount or not clusterBombCount or not ownedTools or not maxSand or not hasSandPet then
 		return
 	end
 	local toolList = {}
 	for _, value in ipairs(ownedTools:GetChildren()) do
 		table.insert(toolList, value.Name)
+	end
+	local questSave = {}
+	if dailyQuests then
+		for _, questFolder in ipairs(dailyQuests:GetChildren()) do
+			questSave[questFolder.Name] = {
+				Progress = questFolder:FindFirstChild("Progress") and questFolder.Progress.Value or 0,
+				Target = questFolder:FindFirstChild("Target") and questFolder.Target.Value or 0,
+				Claimed = questFolder:FindFirstChild("Claimed") and questFolder.Claimed.Value or false,
+			}
+		end
 	end
 	pcall(function()
 		PLAYER_DATA_STORE:SetAsync(player.UserId, {
@@ -774,6 +904,8 @@ local function savePlayerData(player)
 			ClusterBombCount = clusterBombCount.Value,
 			MaxSand = maxSand.Value,
 			HasSandPet = hasSandPet.Value,
+			Potions = potions and { Strength = potions.Strength.Value, Luck = potions.Luck.Value, Speed = potions.Speed.Value } or nil,
+			DailyQuests = questSave,
 			OwnedTools = toolList,
 		})
 	end)
@@ -782,6 +914,8 @@ end
 Players.PlayerRemoving:Connect(function(player)
 	savePlayerData(player)
 	playerMiningState[player] = nil
+	playerAbilityState[player] = nil
+	pendingAbilityDrafts[player] = nil
 	lastShopTeleportAt[player] = nil
 	activePetLoops[player] = nil
 	if activeBackpackModels[player] then
@@ -1339,6 +1473,7 @@ local function triggerExplosion(player, centerPos, radius)
 				if blockType then
 					worldData[key] = false
 					if spawnedParts[key] then
+						recordPropQuestProgress(player, spawnedParts[key])
 						releaseCactus(spawnedParts[key])
 						spawnedParts[key]:Destroy()
 						spawnedParts[key] = nil
@@ -1468,6 +1603,10 @@ local function getSurfaceHeight(bx, bz)
 	return math.max(0, math.floor(broad + detail))
 end
 
+local function getDistanceDifficulty(bx, bz)
+	return math.clamp(Vector2.new(bx, bz).Magnitude / 120, 0, 1)
+end
+
 local function getChestLevelForDepth(depth)
 	local available = {}
 	local totalWeight = 0
@@ -1495,6 +1634,9 @@ local function isInShopSafeZone(bx, by, bz)
 	return relativeToSteel.X >= -halfX and relativeToSteel.X <= halfX and relativeToSteel.Z >= -halfZ and relativeToSteel.Z <= halfZ and by >= -2
 end
 
+local getSurfaceBiome
+local shouldSpawnTree
+
 local function getBlockData(bx, by, bz)
 	if by < -MAX_DEPTH_BLOCKS then
 		return false
@@ -1512,10 +1654,20 @@ local function getBlockData(bx, by, bz)
 	local key = bx .. "_" .. by .. "_" .. bz
 	if worldData[key] == nil then
 		local depth = math.max(0, -by)
-		if by <= 0 and math.random() < CHEST_CHANCE then
-			local level = getChestLevelForDepth(depth)
+		local distanceDifficulty = getDistanceDifficulty(bx, bz)
+		local surfaceHeight = getSurfaceHeight(bx, bz)
+		if by == surfaceHeight and math.random() < PYRAMID_CHANCE * (0.35 + distanceDifficulty) then
+			worldData[key] = { kind = "Pyramid", guardian = true }
+		elseif by <= 0 and math.random() < CHEST_CHANCE * (1 + distanceDifficulty * 2.2) then
+			local level = getChestLevelForDepth(depth + math.floor(distanceDifficulty * 160))
 			worldData[key] = { kind = "Chest", level = level.id }
 		else
+			local underGrassTree = by == surfaceHeight - 1 and getSurfaceBiome(bx, bz) == "grass" and shouldSpawnTree(bx, bz)
+			if underGrassTree and math.random() < 0.14 then
+				local level = getChestLevelForDepth(depth + 180)
+				worldData[key] = { kind = "Chest", level = level.id }
+				return worldData[key]
+			end
 			local oreData = nil
 			for oreId, ore in pairs(ORE_LEVELS) do
 				if depth >= ore.minDepth and math.random() < ore.chance then
@@ -1529,7 +1681,7 @@ local function getBlockData(bx, by, bz)
 	return worldData[key]
 end
 
-local function getSurfaceBiome(bx, bz)
+getSurfaceBiome = function(bx, bz)
 	local n = math.noise(bx * 0.055, bz * 0.055, WORLD_SEED + 117)
 	if n < -0.42 then
 		return "white_sand", Color3.fromRGB(238, 226, 196), Enum.Material.Sand
@@ -1556,7 +1708,7 @@ local function shouldSpawnOasis(bx, bz)
 	return math.noise(bx * 0.045, bz * 0.045, WORLD_SEED + 377) > 0.55 and math.random() < OASIS_CHANCE
 end
 
-local function shouldSpawnTree(bx, bz)
+shouldSpawnTree = function(bx, bz)
 	return math.noise(bx * 0.07, bz * 0.07, WORLD_SEED + 503) > 0.34 and math.random() < TREE_CHANCE
 end
 
@@ -1599,10 +1751,11 @@ local function instanceBlock(bx, by, bz)
 	end
 
 	local chest = isChestBlock(blockType)
+	local pyramid = type(blockType) == "table" and blockType.kind == "Pyramid"
 	local ore = type(blockType) == "table" and blockType.kind == "Ore" and ORE_LEVELS[blockType.ore]
 	local chestLevel = chest and getChestLevel(blockType.level) or nil
 	local blockModel = Instance.new("Model")
-	blockModel.Name = chest and "ChestBlock" or (ore and "OreBlock" or "SandBlock")
+	blockModel.Name = pyramid and "PyramidBlock" or (chest and "ChestBlock" or (ore and "OreBlock" or "SandBlock"))
 	blockModel.Parent = folder
 
 	local part
@@ -1626,7 +1779,7 @@ local function instanceBlock(bx, by, bz)
 		part.Name = "Block"
 		part.Size = Vector3.new(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
 		part.Position = worldFromBlock(bx, by, bz)
-		part.Material = chest and Enum.Material.WoodPlanks or Enum.Material.Sand
+		part.Material = (chest or pyramid) and Enum.Material.WoodPlanks or Enum.Material.Sand
 		part.Parent = blockModel
 	end
 
@@ -1650,7 +1803,10 @@ local function instanceBlock(bx, by, bz)
 	local depthPercent = math.clamp(math.abs(by) / MAX_DEPTH_BLOCKS, 0, 1)
 	local isSurface = by == getSurfaceHeight(bx, bz)
 	local biomeName = nil
-	if ore then
+	if pyramid then
+		part.Material = Enum.Material.Sandstone
+		part.Color = Color3.fromRGB(214, 174, 94)
+	elseif ore then
 		part.Material = ore.material
 		part.Color = ore.color
 	elseif not chest then
@@ -1763,9 +1919,16 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	local currentTool = player.Character and player.Character:FindFirstChildOfClass("Tool")
 	local bombCountName = currentTool and currentTool:GetAttribute("BombCountName")
 	if currentTool and bombCountName then
+		local preStats = player:FindFirstChild("leaderstats")
+		local preMaxSand = player:FindFirstChild("MaxSand")
+		if preStats and preMaxSand and preStats.Sand.Value >= preMaxSand.Value then
+			sendNotification(player, "背包已滿", "背包滿後不能再丟炸彈，請先回商店出售。")
+			return
+		end
 		local bombCount = getBombCountValue(player, bombCountName)
 		bombCount.Value = math.max(0, bombCount.Value - 1)
-		local bombRadius = currentTool:GetAttribute("BombRadius") or 1
+		local ability = playerAbilityState[player] or {}
+		local bombRadius = (currentTool:GetAttribute("BombRadius") or 1) * (ability.BombMultiplier or 1)
 		local bombBaseName = currentTool:GetAttribute("BombBaseName") or BOMB_TOOL_NAME
 		if bombCount.Value <= 0 then
 			currentTool:Destroy()
@@ -1799,7 +1962,11 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 				projectile.Position = flatPosition + Vector3.new(0, arcOffset, 0)
 				task.wait(flightTime / steps)
 			end
-			triggerExplosion(player, targetPosition, bombRadius)
+			local casts = ability.NukeBombs or (ability.ScatterBomb and 3) or 1
+			for cast = 1, casts do
+				local offset = casts == 1 and Vector3.zero or Vector3.new(math.random(-12, 12), 0, math.random(-12, 12))
+				triggerExplosion(player, targetPosition + offset, bombRadius)
+			end
 			projectile:Destroy()
 		end)
 		return
@@ -1829,8 +1996,9 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	end
 
 	local chestLevel = isChestBlock(blockType) and getChestLevel(blockType.level) or nil
-	local depthHardness = math.abs(by) + 10
-	local maxHealth = chestLevel and chestLevel.health or (depthHardness)
+	local isScorched = type(blockType) == "table" and blockType.scorched == true
+	local depthHardness = math.floor((math.abs(by) + 10) * (1 + getDistanceDifficulty(bx, bz) * 2.5))
+	local maxHealth = isScorched and 1 or (chestLevel and chestLevel.health or ((type(blockType) == "table" and blockType.kind == "Pyramid") and 280 or depthHardness))
 	blockHealthData[key] = blockHealthData[key] or maxHealth
 
 	local stateKey = player.UserId .. ":" .. key
@@ -1839,7 +2007,9 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	local elapsed = math.clamp(now - previousTime, 0.05, 0.35)
 	playerMiningState[stateKey] = now
 	local equippedTool = player.Character and player.Character:FindFirstChildOfClass("Tool")
+	local ability = playerAbilityState[player] or {}
 	local power = (equippedTool and equippedTool:GetAttribute("Strength")) or 1
+	if ability.StrengthMultiplier then power *= ability.StrengthMultiplier end
 	blockHealthData[key] -= power * elapsed
 
 	local miningAssets = ServerStorage:FindFirstChild("MiningAssets")
@@ -1882,6 +2052,7 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		worldData[key] = false
 		blockHealthData[key] = nil
 		if spawnedParts[key] then
+			recordPropQuestProgress(player, spawnedParts[key])
 			releaseCactus(spawnedParts[key])
 			spawnedParts[key]:Destroy()
 			spawnedParts[key] = nil
@@ -1891,16 +2062,198 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 		if isChestBlock(blockType) then
 			local level = getChestLevel(blockType.level)
 			local reward = math.random(level.reward[1], level.reward[2])
+			if blockType.rewardBoost then reward = math.floor(reward * blockType.rewardBoost) end
+			if ability.LuckMoneyMultiplier then reward = math.floor(reward * ability.LuckMoneyMultiplier) end
 			lstats.Coins.Value += reward
 			rewardEmojiEvent:FireClient(player, level.emoji or "🪙", reward)
+		elseif type(blockType) == "table" and blockType.kind == "Pyramid" then
+			local reward = math.random(2500, 6500)
+			lstats.Coins.Value += reward
+			rewardEmojiEvent:FireClient(player, "🏺", reward)
 		else
 			local ore = type(blockType) == "table" and blockType.kind == "Ore" and ORE_LEVELS[blockType.ore]
 			local gain = ore and ore.blocks or math.max(1, math.floor(depthHardness / 45) + 1)
+			if ability.HardnessCoins then
+				lstats.Coins.Value += depthHardness
+				rewardEmojiEvent:FireClient(player, "🍀", depthHardness)
+			end
 			lstats.Sand.Value = math.clamp(lstats.Sand.Value + gain, 0, maxSand.Value)
 			if lstats:FindFirstChild("TotalBlocks") then lstats.TotalBlocks.Value += gain end
 		end
 
 		revealNeighbors(bx, by, bz)
+		if ability.RainbowBeam and math.random() < 0.18 then
+			triggerExplosion(player, worldFromBlock(bx + math.random(-1,1), by, bz + math.random(-1,1)), 1)
+		end
+	end
+end)
+
+questStateFunction.OnServerInvoke = function(player)
+	return serializeQuestState(player)
+end
+
+questActionEvent.OnServerEvent:Connect(function(player, action, questId)
+	if action ~= "Claim" then return end
+	local definition = DAILY_QUEST_DEFINITIONS[questId]
+	local quests = getOrCreateDailyQuests(player)
+	local questFolder = quests:FindFirstChild(questId)
+	local progress = questFolder and questFolder:FindFirstChild("Progress")
+	local target = questFolder and questFolder:FindFirstChild("Target")
+	local claimed = questFolder and questFolder:FindFirstChild("Claimed")
+	if not definition or not progress or not target or not claimed then return end
+	if claimed.Value then
+		sendNotification(player, "已領取", "這個每日任務獎勵已領取。")
+	elseif progress.Value >= target.Value then
+		claimed.Value = true
+		addPotionCount(player, definition.rewardPotion, 1)
+		sendNotification(player, "任務獎勵", "獲得 " .. definition.rewardName .. " * 1。")
+	else
+		sendNotification(player, "任務未完成", "進度不足，繼續探索礦區吧。")
+	end
+end)
+
+local POTION_EFFECTS = {
+	Strength = { displayName = "力量藥水", duration = 90, stat = "StrengthMultiplier", multiplier = 1.35 },
+	Luck = { displayName = "幸運藥水", duration = 90, stat = "LuckMoneyMultiplier", multiplier = 1.5 },
+	Speed = { displayName = "速度藥水", duration = 90, stat = "SpeedMultiplier", multiplier = 1.25 },
+}
+
+potionActionEvent.OnServerEvent:Connect(function(player, potionName)
+	local effect = POTION_EFFECTS[potionName]
+	local potions = player:FindFirstChild("Potions")
+	local count = potions and potions:FindFirstChild(potionName)
+	if not effect or not count or count.Value <= 0 then
+		sendNotification(player, "藥水不足", "目前沒有可使用的藥水。")
+		return
+	end
+	count.Value -= 1
+	local state = playerAbilityState[player] or {}
+	state[effect.stat] = (state[effect.stat] or 1) * effect.multiplier
+	playerAbilityState[player] = state
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if humanoid and state.SpeedMultiplier then humanoid.WalkSpeed = 16 * state.SpeedMultiplier end
+	sendNotification(player, "藥水啟用", effect.displayName .. " 已生效 " .. effect.duration .. " 秒。")
+	task.delay(effect.duration, function()
+		if player.Parent then
+			local currentState = playerAbilityState[player] or {}
+			if type(currentState[effect.stat]) == "number" then
+				currentState[effect.stat] = math.max(1, currentState[effect.stat] / effect.multiplier)
+			end
+			playerAbilityState[player] = currentState
+			local resetHumanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			if resetHumanoid and effect.stat == "SpeedMultiplier" then resetHumanoid.WalkSpeed = 16 * (currentState.SpeedMultiplier or 1) end
+			sendNotification(player, "藥水結束", effect.displayName .. " 效果已結束。")
+		end
+	end)
+end)
+
+local ABILITY_EFFECTS = {
+	["炸彈威力 +20%"] = { BombMultiplier = 1.2 }, ["力量 +20%"] = { StrengthMultiplier = 1.2 },
+	["挖掘範圍 +15%"] = { RangeMultiplier = 1.15 }, ["走路速度 +10%"] = { SpeedMultiplier = 1.1 },
+	["七彩霞光"] = { RainbowBeam = true }, ["散彈"] = { ScatterBomb = true }, ["雙手"] = { StrengthMultiplier = 2, RangeMultiplier = 2 },
+	["運氣佳"] = { LuckMoneyMultiplier = 1.6, HardnessCoins = true }, ["專注"] = { Focus = true, StrengthMultiplier = 1.35 },
+	["核彈"] = { BombMultiplier = 15, NukeBombs = 10 }, ["雷射"] = { Laser = true },
+}
+
+local ABILITY_CARD_POOL = {
+	{ name = "炸彈威力 +20%", rarity = "green", weight = 46, description = "本輪炸彈爆炸範圍提高 20%。" },
+	{ name = "力量 +20%", rarity = "green", weight = 46, description = "本輪挖掘力量提高 20%。" },
+	{ name = "挖掘範圍 +15%", rarity = "blue", weight = 28, description = "提升範圍型效果，與炸彈/特殊能力相容。" },
+	{ name = "走路速度 +10%", rarity = "blue", weight = 28, description = "本輪移動速度提高 10%。" },
+	{ name = "七彩霞光", rarity = "purple", weight = 10, description = "破壞方塊時有機率觸發周圍小爆破。" },
+	{ name = "散彈", rarity = "purple", weight = 10, description = "投擲炸彈後分裂為 3 次落點爆破。" },
+	{ name = "雙手", rarity = "purple", weight = 10, description = "挖掘力量與範圍大幅提升。" },
+	{ name = "運氣佳", rarity = "gold", weight = 3, description = "寶箱金錢提升，並可依硬度額外取得金幣。" },
+	{ name = "專注", rarity = "gold", weight = 3, description = "提供穩定挖掘力量加成，適合長時間連挖。" },
+	{ name = "核彈", rarity = "orange", weight = 1, description = "炸彈變成多次超大範圍爆破。" },
+	{ name = "雷射", rarity = "orange", weight = 1, description = "保留為直線挖掘能力相容旗標。" },
+}
+
+local function rollAbilityCard(excluded)
+	local totalWeight = 0
+	for _, card in ipairs(ABILITY_CARD_POOL) do
+		if not excluded[card.name] then totalWeight += card.weight end
+	end
+	local roll = math.random() * totalWeight
+	for _, card in ipairs(ABILITY_CARD_POOL) do
+		if not excluded[card.name] then
+			roll -= card.weight
+			if roll <= 0 then
+				return card
+			end
+		end
+	end
+	return ABILITY_CARD_POOL[1]
+end
+
+function offerAbilityDraft(player, reason)
+	if not player.Parent then return end
+	local excluded = {}
+	local choices = {}
+	for _ = 1, 3 do
+		local rolled = rollAbilityCard(excluded)
+		excluded[rolled.name] = true
+		table.insert(choices, { name = rolled.name, rarity = rolled.rarity, description = rolled.description })
+	end
+	pendingAbilityDrafts[player] = excluded
+	abilityDraftEvent:FireClient(player, "Offer", choices, reason or "Timer")
+end
+
+abilityDraftEvent.OnServerEvent:Connect(function(player, action, abilityName)
+	if action ~= "Select" then return end
+	local pending = pendingAbilityDrafts[player]
+	if not pending or not pending[abilityName] then
+		sendNotification(player, "抽卡失效", "請等待下一次能力抽選。")
+		return
+	end
+	pendingAbilityDrafts[player] = nil
+	local effect = ABILITY_EFFECTS[abilityName]
+	if not effect then return end
+	local state = playerAbilityState[player] or {}
+	for key, value in pairs(effect) do
+		if type(value) == "number" and type(state[key]) == "number" then state[key] *= value else state[key] = value end
+	end
+	playerAbilityState[player] = state
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if humanoid and state.SpeedMultiplier then humanoid.WalkSpeed = 16 * state.SpeedMultiplier end
+	sendNotification(player, "能力啟用", abilityName .. " 已加入本輪能力。")
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(60)
+		for _, player in ipairs(Players:GetPlayers()) do
+			offerAbilityDraft(player, "Timer")
+		end
+	end
+end)
+
+local function scorchBlockAt(position)
+	local bx, by, bz = blockFromWorld(position)
+	for x=-1,1 do for z=-1,1 do
+		local key = (bx+x).."_"..by.."_"..(bz+z)
+		local data = getBlockData(bx+x, by, bz+z)
+		if data then
+			if type(data) == "table" then data.scorched = true; if data.kind == "Chest" then data.rewardBoost = 2 end else worldData[key] = { kind = "ScorchedSand", scorched = true } end
+			if spawnedParts[key] and spawnedParts[key].PrimaryPart then spawnedParts[key].PrimaryPart.Color = Color3.fromRGB(18,18,18); spawnedParts[key].PrimaryPart.Material = Enum.Material.Slate end
+		end
+	end end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(math.random(90, 180))
+		currentWeather = "Thunderstorm"
+		weatherEvent:FireAllClients(currentWeather)
+		for _=1, math.random(6, 12) do
+			task.wait(math.random(2, 5))
+			local origin = getWorldOrigin() + Vector3.new(math.random(-220,220), 80, math.random(-220,220))
+			scorchBlockAt(origin - Vector3.new(0,80,0))
+			playConfiguredSound("LightningSound", Workspace)
+			-- 隕石雨事件保留為地形焦黑效果，避免把獎勵歸給任一玩家。
+		end
+		currentWeather = "Clear"
+		weatherEvent:FireAllClients(currentWeather)
 	end
 end)
 
@@ -1919,6 +2272,9 @@ local function refreshWorld()
 			sand.Value = 0
 		end
 		teleportPlayerToSteel(player)
+		playerAbilityState[player] = {}
+		pendingAbilityDrafts[player] = nil
+		offerAbilityDraft(player, "WorldRefresh")
 		sendNotification(player, "世界刷新", "礦區已重置，所有玩家已回到鋼體平台。")
 	end
 end
