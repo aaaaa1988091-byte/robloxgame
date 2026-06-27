@@ -23,6 +23,8 @@ local CACTUS_HEIGHT_SCALE = 2.2
 local MINING_DEBRIS_COUNT = 18
 local MAX_BACKPACK_CAPPED = 20
 local BACKPACK_UPGRADE_AMOUNT = 20
+local PET_MINE_RADIUS_BLOCKS = 2
+local PET_MINE_INTERVAL = 7
 local WORLD_REFRESH_SECONDS = 10 * 60
 local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlayerDataV2")
 
@@ -117,6 +119,9 @@ local PICKAXE_NAMES = { "木鎬", "鐵鎬", "鑽石鎬", "鐵鑽頭", "鑽石鑽
 local BOMB_TOOL_NAME = "💣 炸彈"
 local CLUSTER_BOMB_TOOL_NAME = "💥 集束炸彈"
 local playerMiningState = {}
+local activePetModels = {}
+local activePetLoops = {}
+local ensureSandPet = function() end
 
 local function teleportPlayerToSteel(player)
 	local char = player.Character
@@ -278,15 +283,40 @@ local SHOP_CATALOG = {
 		model = { kind = "bomb", color = Color3.fromRGB(120, 30, 30), material = Enum.Material.Metal },
 	},
 	{
-		id = "backpack_upgrade",
-		name = "背包升級",
-		description = "背包容量 +20。只要在這個表新增商品與模型，就會自動進商店輪播。",
-		action = "BuyBackpackUpgrade",
-		item = "20",
-		price = 300,
-		model = { kind = "backpack", color = Color3.fromRGB(85, 135, 210), material = Enum.Material.Fabric },
+		id = "sand_pet",
+		name = "沙漠小蜥蜴",
+		description = "會跟著你，並且每隔一段時間慢慢吃掉附近一顆沙子。",
+		action = "BuyPet",
+		item = "SandPet",
+		price = 2500,
+		model = { kind = "bomb", color = Color3.fromRGB(210, 170, 75), material = Enum.Material.SmoothPlastic },
 	},
 }
+
+local BACKPACK_CATALOG = {
+	{ id = "small_backpack", name = "小背包", capacity = 40, price = 250, color = Color3.fromRGB(95, 140, 205) },
+	{ id = "trail_backpack", name = "旅行背包", capacity = 70, price = 650, color = Color3.fromRGB(75, 170, 120) },
+	{ id = "miner_backpack", name = "礦工背包", capacity = 110, price = 1300, color = Color3.fromRGB(180, 130, 65) },
+	{ id = "wide_backpack", name = "寬口背包", capacity = 160, price = 2300, color = Color3.fromRGB(200, 90, 75) },
+	{ id = "steel_backpack", name = "鋼架背包", capacity = 230, price = 3800, color = Color3.fromRGB(130, 145, 160) },
+	{ id = "desert_backpack", name = "沙漠背包", capacity = 320, price = 5600, color = Color3.fromRGB(220, 180, 95) },
+	{ id = "crystal_backpack", name = "水晶背包", capacity = 450, price = 8200, color = Color3.fromRGB(90, 220, 240) },
+	{ id = "royal_backpack", name = "皇家背包", capacity = 620, price = 12000, color = Color3.fromRGB(175, 95, 230) },
+	{ id = "void_backpack", name = "虛空背包", capacity = 850, price = 17500, color = Color3.fromRGB(45, 45, 75) },
+	{ id = "endless_backpack", name = "無盡背包", capacity = 1200, price = 26000, color = Color3.fromRGB(255, 220, 90) },
+}
+
+for _, backpack in ipairs(BACKPACK_CATALOG) do
+	table.insert(SHOP_CATALOG, {
+		id = backpack.id,
+		name = backpack.name,
+		description = "購買後背包容量變為 " .. backpack.capacity .. "。背包和鎬子一樣是直接購買不同大小。",
+		action = "BuyBackpack",
+		item = tostring(backpack.capacity),
+		price = backpack.price,
+		model = { kind = "backpack", color = backpack.color, material = Enum.Material.Fabric },
+	})
+end
 
 local TOOL_PRICES = {}
 for _, catalogItem in ipairs(SHOP_CATALOG) do
@@ -513,6 +543,11 @@ Players.PlayerAdded:Connect(function(player)
 	clusterBombCount.Value = 0
 	clusterBombCount.Parent = player
 
+	local hasSandPet = Instance.new("BoolValue")
+	hasSandPet.Name = "HasSandPet"
+	hasSandPet.Value = false
+	hasSandPet.Parent = player
+
 	local ownedTools = getOwnedToolsFolder(player)
 	local success, savedData = pcall(function()
 		return PLAYER_DATA_STORE:GetAsync(player.UserId)
@@ -523,6 +558,7 @@ Players.PlayerAdded:Connect(function(player)
 		bombCount.Value = tonumber(savedData.BombCount) or 0
 		clusterBombCount.Value = tonumber(savedData.ClusterBombCount) or 0
 		maxSand.Value = tonumber(savedData.MaxSand) or MAX_BACKPACK_CAPPED
+		hasSandPet.Value = savedData.HasSandPet == true
 		for _, toolName in ipairs(savedData.OwnedTools or {}) do
 			rememberTool(player, toolName)
 		end
@@ -533,7 +569,11 @@ Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function()
 		task.wait(0.5)
 		giveStoredWeapons(player)
+		ensureSandPet(player)
 		teleportPlayerToSteel(player)
+	end)
+	hasSandPet.Changed:Connect(function()
+		ensureSandPet(player)
 	end)
 end)
 
@@ -544,7 +584,8 @@ local function savePlayerData(player)
 	local clusterBombCount = player:FindFirstChild("ClusterBombCount")
 	local ownedTools = player:FindFirstChild("OwnedTools")
 	local maxSand = player:FindFirstChild("MaxSand")
-	if not leaderstats or not currentPickaxe or not bombCount or not clusterBombCount or not ownedTools or not maxSand then
+	local hasSandPet = player:FindFirstChild("HasSandPet")
+	if not leaderstats or not currentPickaxe or not bombCount or not clusterBombCount or not ownedTools or not maxSand or not hasSandPet then
 		return
 	end
 	local toolList = {}
@@ -558,6 +599,7 @@ local function savePlayerData(player)
 			BombCount = bombCount.Value,
 			ClusterBombCount = clusterBombCount.Value,
 			MaxSand = maxSand.Value,
+			HasSandPet = hasSandPet.Value,
 			OwnedTools = toolList,
 		})
 	end)
@@ -566,6 +608,11 @@ end
 Players.PlayerRemoving:Connect(function(player)
 	savePlayerData(player)
 	playerMiningState[player] = nil
+	activePetLoops[player] = nil
+	if activePetModels[player] then
+		activePetModels[player]:Destroy()
+		activePetModels[player] = nil
+	end
 end)
 
 game:BindToClose(function()
@@ -957,7 +1004,117 @@ local function getChestLevel(levelId)
 	return CHEST_LEVELS[1]
 end
 
+local function makeSandPetModel(player)
+	local model = Instance.new("Model")
+	model.Name = player.Name .. "_SandPet"
+
+	local body = Instance.new("Part")
+	body.Name = "Body"
+	body.Shape = Enum.PartType.Ball
+	body.Size = Vector3.new(1.4, 0.9, 1.8)
+	body.Material = Enum.Material.SmoothPlastic
+	body.Color = Color3.fromRGB(210, 170, 75)
+	body.Anchored = true
+	body.CanCollide = false
+	body.Parent = model
+	model.PrimaryPart = body
+
+	local eye = Instance.new("Part")
+	eye.Name = "Eye"
+	eye.Shape = Enum.PartType.Ball
+	eye.Size = Vector3.new(0.18, 0.18, 0.18)
+	eye.Material = Enum.Material.Neon
+	eye.Color = Color3.fromRGB(30, 25, 15)
+	eye.Anchored = true
+	eye.CanCollide = false
+	eye.Parent = model
+
+	model.Parent = Workspace
+	return model
+end
+
+local function petEatNearbySand(player)
+	local hasSandPet = player:FindFirstChild("HasSandPet")
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local maxSand = player:FindFirstChild("MaxSand")
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if not hasSandPet or not hasSandPet.Value or not leaderstats or not maxSand or not root then
+		return
+	end
+	local sand = leaderstats:FindFirstChild("Sand")
+	if not sand or sand.Value >= maxSand.Value then
+		return
+	end
+
+	local centerX, centerY, centerZ = blockFromWorld(root.Position)
+	for radius = 0, PET_MINE_RADIUS_BLOCKS do
+		for x = -radius, radius do
+			for y = -1, 1 do
+				for z = -radius, radius do
+					local bx, by, bz = centerX + x, centerY + y, centerZ + z
+					local key = bx .. "_" .. by .. "_" .. bz
+					local blockType = worldData[key]
+					if blockType and not isChestBlock(blockType) then
+						worldData[key] = false
+						blockHealthData[key] = nil
+						if spawnedParts[key] then
+							releaseCactus(spawnedParts[key])
+							spawnedParts[key]:Destroy()
+							spawnedParts[key] = nil
+						end
+						sand.Value = math.clamp(sand.Value + 1, 0, maxSand.Value)
+						if revealNeighbors then
+							revealNeighbors(bx, by, bz)
+						end
+						return
+					end
+				end
+			end
+		end
+	end
+end
+
+function ensureSandPet(player)
+	local hasSandPet = player:FindFirstChild("HasSandPet")
+	if not hasSandPet or not hasSandPet.Value then
+		if activePetModels[player] then
+			activePetModels[player]:Destroy()
+			activePetModels[player] = nil
+		end
+		return
+	end
+	if not activePetModels[player] or not activePetModels[player].Parent then
+		activePetModels[player] = makeSandPetModel(player)
+	end
+	if activePetLoops[player] then
+		return
+	end
+	activePetLoops[player] = true
+	task.spawn(function()
+		while player.Parent and activePetLoops[player] do
+			local model = activePetModels[player]
+			local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			if model and model.PrimaryPart and root then
+				local target = root.CFrame * CFrame.new(2.8, -1.6, 2.4)
+				model:PivotTo(model:GetPivot():Lerp(target, 0.18))
+				local eye = model:FindFirstChild("Eye")
+				if eye then
+					eye.CFrame = model.PrimaryPart.CFrame * CFrame.new(0, 0.18, -0.72)
+				end
+			end
+			task.wait(0.15)
+		end
+	end)
+	task.spawn(function()
+		while player.Parent and activePetLoops[player] do
+			task.wait(PET_MINE_INTERVAL)
+			petEatNearbySand(player)
+		end
+	end)
+end
+
 local releaseCactus
+local revealNeighbors
 
 -- 炸彈爆炸邏輯
 local function triggerExplosion(player, centerPos, radius)
@@ -1061,16 +1218,35 @@ shopActionEvent.OnServerEvent:Connect(function(player, action, item)
 		else
 			sendNotification(player, "交易失敗", "金幣不足。")
 		end
-	elseif action == "BuyBackpackUpgrade" then
+	elseif action == "BuyBackpack" or action == "BuyBackpackUpgrade" then
 		local price = catalogPrice or 300
-		local upgradeAmount = tonumber(item) or BACKPACK_UPGRADE_AMOUNT
-		if coins.Value >= price then
+		local capacity = (action == "BuyBackpack") and (tonumber(item) or MAX_BACKPACK_CAPPED) or ((player:FindFirstChild("MaxSand") and player.MaxSand.Value or MAX_BACKPACK_CAPPED) + (tonumber(item) or BACKPACK_UPGRADE_AMOUNT))
+		local maxSand = player:FindFirstChild("MaxSand")
+		if not maxSand then
+			return
+		end
+		if maxSand.Value >= capacity then
+			sendNotification(player, "已擁有背包", "目前背包容量已經不小於這個背包。")
+		elseif coins.Value >= price then
 			coins.Value -= price
-			local maxSand = player:FindFirstChild("MaxSand")
-			if maxSand then
-				maxSand.Value += upgradeAmount
-			end
-			sendNotification(player, "背包升級", "背包容量增加 " .. upgradeAmount .. "！")
+			maxSand.Value = capacity
+			sendNotification(player, "購買成功", "背包容量變為 " .. capacity .. "！")
+		else
+			sendNotification(player, "交易失敗", "金幣不足。")
+		end
+	elseif action == "BuyPet" then
+		local price = catalogPrice or 2500
+		local hasSandPet = player:FindFirstChild("HasSandPet")
+		if not hasSandPet then
+			return
+		end
+		if hasSandPet.Value then
+			sendNotification(player, "已擁有寵物", "沙漠小蜥蜴已經跟著你了。")
+		elseif coins.Value >= price then
+			coins.Value -= price
+			hasSandPet.Value = true
+			ensureSandPet(player)
+			sendNotification(player, "購買成功", "沙漠小蜥蜴會慢慢吃掉附近沙子。")
 		else
 			sendNotification(player, "交易失敗", "金幣不足。")
 		end
@@ -1278,7 +1454,7 @@ local function instanceBlock(bx, by, bz)
 	spawnedParts[key] = blockModel
 end
 
-local function revealNeighbors(bx, by, bz)
+function revealNeighbors(bx, by, bz)
 	local neighbors = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 	for _, offset in ipairs(neighbors) do
 		local nx, ny, nz = bx + offset[1], by + offset[2], bz + offset[3]
@@ -1476,6 +1652,44 @@ task.spawn(function()
 		end
 		task.wait(5)
 		refreshWorld()
+	end
+end)
+
+
+local function isPlayerInSteelSafeArea(player)
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local steelFloor = getSteelFloor()
+	if not root or not steelFloor then
+		return false
+	end
+	local relative = steelFloor.CFrame:PointToObjectSpace(root.Position)
+	return math.abs(relative.X) <= steelFloor.Size.X / 2 + 2
+		and math.abs(relative.Z) <= steelFloor.Size.Z / 2 + 2
+		and root.Position.Y >= steelFloor.Position.Y - 2
+		and root.Position.Y <= steelFloor.Position.Y + 18
+end
+
+task.spawn(function()
+	while true do
+		for _, player in ipairs(Players:GetPlayers()) do
+			local character = player.Character
+			if character then
+				local forceField = character:FindFirstChild("SteelSafeZoneForceField")
+				if isPlayerInSteelSafeArea(player) then
+					if not forceField then
+						forceField = Instance.new("ForceField")
+						forceField.Name = "SteelSafeZoneForceField"
+						forceField.Visible = false
+						forceField.Parent = character
+					end
+				else
+					if forceField then
+						forceField:Destroy()
+					end
+				end
+			end
+		end
+		task.wait(0.25)
 	end
 end)
 

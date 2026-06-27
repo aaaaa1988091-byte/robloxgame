@@ -140,6 +140,7 @@ local suppressShopOpenUntil = os.clock() + 5
 local previousCameraType = nil
 local previousCameraSubject = nil
 local previousCameraCFrame = nil
+local shopIsOpen = false
 
 local localPreviewFolder = Workspace:FindFirstChild("LocalShopPreviewModels")
 if not localPreviewFolder then
@@ -465,14 +466,14 @@ end
 
 local function focusShopCamera()
 	local camera = Workspace.CurrentCamera
-	local shopWorld = getShopWorld()
-	local anchor = shopWorld and shopWorld:FindFirstChild("ShopCameraAnchor")
 	if not camera then
 		return
 	end
-	previousCameraType = camera.CameraType
-	previousCameraSubject = camera.CameraSubject
-	previousCameraCFrame = camera.CFrame
+	if not shopIsOpen then
+		previousCameraType = camera.CameraType
+		previousCameraSubject = camera.CameraSubject
+		previousCameraCFrame = camera.CFrame
+	end
 	camera.CameraType = Enum.CameraType.Scriptable
 	camera.CFrame = CFrame.lookAt(SHOP_PREVIEW_POSITION + Vector3.new(0, 6, 18), SHOP_PREVIEW_POSITION + Vector3.new(0, 2.4, 0))
 end
@@ -483,14 +484,18 @@ local function restoreCamera()
 		return
 	end
 	camera.CameraType = previousCameraType or Enum.CameraType.Custom
-	camera.CameraSubject = previousCameraSubject
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	camera.CameraSubject = previousCameraSubject or humanoid
+	if humanoid and (not previousCameraSubject or previousCameraSubject.Parent == nil) then
+		camera.CameraSubject = humanoid
+	end
 	if previousCameraCFrame then
 		camera.CFrame = previousCameraCFrame
 	end
 end
 
 local function openShop()
-	if os.clock() < suppressShopOpenUntil then
+	if os.clock() < suppressShopOpenUntil or shopIsOpen then
 		return
 	end
 	shopOpenCount += 1
@@ -499,11 +504,16 @@ local function openShop()
 	shopFrame.Position = UDim2.new(0.5, 0, 1, 80)
 	TweenService:Create(shopFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, 0, 1, -110) }):Play()
 	focusShopCamera()
+	shopIsOpen = true
 	selectedShopIndex = 1
 	updateShopSelection(nil)
 end
 
 closeShop = function()
+	if not shopIsOpen and not shopFrame.Visible then
+		return
+	end
+	shopIsOpen = false
 	shopFrame.Visible = false
 	clear3DDisplays()
 	restoreCamera()
@@ -716,9 +726,8 @@ local function connectShopOpenZone()
 				if not root then
 					return
 				end
-				local localPosition = zone.CFrame:PointToObjectSpace(root.Position)
-				local halfSize = zone.Size * 0.5
-				local stillInside = math.abs(localPosition.X) <= halfSize.X + 1 and math.abs(localPosition.Y) <= halfSize.Y + 3 and math.abs(localPosition.Z) <= halfSize.Z + 1
+				local flatDistance = Vector3.new(root.Position.X - zone.Position.X, 0, root.Position.Z - zone.Position.Z).Magnitude
+				local stillInside = flatDistance <= math.max(zone.Size.Y, zone.Size.Z) / 2 + 1
 				if not stillInside then
 					touchingShopZone = false
 					closeShop()
@@ -731,10 +740,19 @@ end
 connectShopOpenZone()
 task.spawn(function()
 	while true do
-		if not getShopWorld() or not (getShopWorld() and getShopWorld():FindFirstChild("ShopOpenZone")) then
+		local shopWorld = getShopWorld()
+		local zone = shopWorld and shopWorld:FindFirstChild("ShopOpenZone")
+		if not zone then
 			connectShopOpenZone()
+		elseif shopIsOpen then
+			local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			local flatDistance = root and Vector3.new(root.Position.X - zone.Position.X, 0, root.Position.Z - zone.Position.Z).Magnitude or math.huge
+			if flatDistance > math.max(zone.Size.Y, zone.Size.Z) / 2 + 2 then
+				touchingShopZone = false
+				closeShop()
+			end
 		end
-		task.wait(2)
+		task.wait(0.25)
 	end
 end)
 
