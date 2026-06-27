@@ -18,9 +18,14 @@ local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefre
 local playerGui = player:WaitForChild("PlayerGui")
 local gui = playerGui:FindFirstChild("MiningHud")
 if not gui then
-	gui = Instance.new("ScreenGui")
-	gui.Name = "MiningHud"
-	gui.ResetOnSpawn = false
+	local starterTemplate = StarterGui:FindFirstChild("MiningHud")
+	if starterTemplate then
+		gui = starterTemplate:Clone()
+	else
+		gui = Instance.new("ScreenGui")
+		gui.Name = "MiningHud"
+		gui.ResetOnSpawn = false
+	end
 	gui.Parent = playerGui
 end
 

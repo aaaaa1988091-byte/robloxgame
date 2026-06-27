@@ -1,6 +1,8 @@
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local StarterGui = game:GetService("StarterGui")
 local DataStoreService = game:GetService("DataStoreService")
 
 -- ==================== 參數設定 ====================
@@ -511,6 +513,121 @@ local function createCatalogModel(parent, itemData, pivotCFrame)
 	return model
 end
 
+
+local function getOrCreateChild(parent, className, name)
+	local existing = parent:FindFirstChild(name)
+	if existing and existing.ClassName == className then
+		return existing, false
+	end
+	local created = Instance.new(className)
+	created.Name = name
+	created.Parent = parent
+	return created, true
+end
+
+local function configureGuiButton(parent, name, text, size, position)
+	local button, created = getOrCreateChild(parent, "TextButton", name)
+	if created then
+		button.Text = text
+		button.Size = size
+		button.Position = position
+		button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+		button.TextColor3 = Color3.fromRGB(255, 255, 255)
+		button.TextScaled = true
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 10)
+		corner.Parent = button
+	end
+	return button, created
+end
+
+local function ensureStarterGuiTemplate()
+	local gui, guiCreated = getOrCreateChild(StarterGui, "ScreenGui", "MiningHud")
+	if guiCreated then
+		gui.ResetOnSpawn = false
+	end
+
+	local infoLabel, infoCreated = getOrCreateChild(gui, "TextLabel", "WorldInfo")
+	if infoCreated then
+		infoLabel.Size = UDim2.fromOffset(260, 58)
+		infoLabel.Position = UDim2.fromOffset(16, 16)
+		infoLabel.BackgroundTransparency = 0.25
+		infoLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+		infoLabel.TextColor3 = Color3.fromRGB(255, 245, 210)
+		infoLabel.TextWrapped = true
+		infoLabel.TextScaled = true
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 12)
+		corner.Parent = infoLabel
+	end
+
+	configureGuiButton(gui, "TeleportHomeButton", "一鍵回城", UDim2.fromOffset(120, 42), UDim2.fromOffset(16, 160))
+	local fullButton, fullButtonCreated = configureGuiButton(gui, "FullBackpackReturnButton", "背包已滿！返回商城", UDim2.fromOffset(260, 58), UDim2.new(0.5, -130, 0.52, 0))
+	if fullButton and fullButtonCreated then
+		fullButton.BackgroundColor3 = Color3.fromRGB(170, 80, 35)
+		fullButton.Visible = false
+	end
+
+	local shopFrame, shopCreated = getOrCreateChild(gui, "Frame", "ShopFrame")
+	if shopCreated then
+		shopFrame.Size = UDim2.fromOffset(380, 240)
+		shopFrame.Position = UDim2.new(0.5, -190, 1, -260)
+		shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
+		shopFrame.Visible = false
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 16)
+		corner.Parent = shopFrame
+	end
+	configureGuiButton(shopFrame, "CloseButton", "X", UDim2.fromOffset(36, 36), UDim2.new(1, -44, 0, 8))
+	configureGuiButton(shopFrame, "PreviousItem", "◀ 上一個", UDim2.fromOffset(110, 42), UDim2.fromOffset(16, 150))
+	configureGuiButton(shopFrame, "BuySelected", "購買", UDim2.fromOffset(120, 42), UDim2.fromOffset(130, 150))
+	configureGuiButton(shopFrame, "NextItem", "下一個 ▶", UDim2.fromOffset(110, 42), UDim2.fromOffset(254, 150))
+
+	local title, titleCreated = getOrCreateChild(shopFrame, "TextLabel", "Title")
+	if titleCreated then
+		title.Text = "礦工棚子商店"
+		title.Size = UDim2.new(1, -48, 0, 44)
+		title.Position = UDim2.fromOffset(8, 8)
+		title.BackgroundTransparency = 1
+		title.TextColor3 = Color3.fromRGB(255, 235, 190)
+		title.TextScaled = true
+	end
+
+	local description, descriptionCreated = getOrCreateChild(shopFrame, "TextLabel", "Description")
+	if descriptionCreated then
+		description.Size = UDim2.new(1, -32, 0, 76)
+		description.Position = UDim2.fromOffset(16, 56)
+		description.BackgroundTransparency = 0.25
+		description.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
+		description.TextColor3 = Color3.fromRGB(255, 235, 190)
+		description.TextWrapped = true
+		description.TextScaled = true
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 12)
+		corner.Parent = description
+	end
+
+	local progressFrame, progressCreated = getOrCreateChild(gui, "Frame", "MiningProgress")
+	if progressCreated then
+		progressFrame.Size = UDim2.fromOffset(220, 20)
+		progressFrame.Position = UDim2.new(0.5, -110, 0.72, 0)
+		progressFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+		progressFrame.Visible = false
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = progressFrame
+	end
+	local progressBar, barCreated = getOrCreateChild(progressFrame, "Frame", "Bar")
+	if barCreated then
+		progressBar.Size = UDim2.fromScale(1, 1)
+		progressBar.BackgroundColor3 = Color3.fromRGB(252, 203, 96)
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = progressBar
+	end
+end
+ensureStarterGuiTemplate()
+
 -- ==================== 2. 建立齊平場地與實體商店 ====================
 local function createShopWorld()
 	local shopModel = Workspace:FindFirstChild("MiningShopWorld") or Instance.new("Model")
@@ -616,9 +733,9 @@ local function createShopWorld()
 	previewFolder.Name = "ShopPreviewModels"
 	previewFolder.Parent = shopModel
 
-	local itemModelsFolder = ReplicatedStorage:FindFirstChild("MiningItemModels") or Instance.new("Folder")
+	local itemModelsFolder = ServerStorage:FindFirstChild("MiningItemModels") or Instance.new("Folder")
 	itemModelsFolder.Name = "MiningItemModels"
-	itemModelsFolder.Parent = ReplicatedStorage
+	itemModelsFolder.Parent = ServerStorage
 	for _, catalogItem in ipairs(SHOP_CATALOG) do
 		if not itemModelsFolder:FindFirstChild(catalogItem.id) then
 			local itemFolder = Instance.new("Folder")
@@ -628,9 +745,9 @@ local function createShopWorld()
 		end
 	end
 
-	local miningAssets = ReplicatedStorage:FindFirstChild("MiningAssets") or Instance.new("Folder")
+	local miningAssets = ServerStorage:FindFirstChild("MiningAssets") or Instance.new("Folder")
 	miningAssets.Name = "MiningAssets"
-	miningAssets.Parent = ReplicatedStorage
+	miningAssets.Parent = ServerStorage
 	local effectsFolder = miningAssets:FindFirstChild("MiningEffects") or Instance.new("Folder")
 	effectsFolder.Name = "MiningEffects"
 	effectsFolder.Parent = miningAssets
@@ -933,7 +1050,8 @@ miningEvent.OnServerEvent:Connect(function(player, targetPart)
 	local power = (equippedTool and equippedTool:GetAttribute("Strength")) or 1
 	blockHealthData[key] -= power * elapsed
 
-	local miningEffects = ReplicatedStorage:FindFirstChild("MiningAssets") and ReplicatedStorage.MiningAssets:FindFirstChild("MiningEffects")
+	local miningAssets = ServerStorage:FindFirstChild("MiningAssets")
+	local miningEffects = miningAssets and miningAssets:FindFirstChild("MiningEffects")
 	local particleTemplate = miningEffects and miningEffects:FindFirstChild("IonMiningParticles")
 	if particleTemplate then
 		local particles = particleTemplate:Clone()
