@@ -12,7 +12,11 @@ local MiningRemotes = require(MiningShared:WaitForChild("Remotes"))
 local MiningCatalog = require(MiningShared:WaitForChild("Catalog"))
 local MiningVisuals = require(MiningShared:WaitForChild("Visuals"))
 local ModelFactory = require(MiningShared:WaitForChild("ModelFactory"))
-local PlayerSchema = require(script.Parent:WaitForChild("MiningServer"):WaitForChild("PlayerSchema"))
+local PlayerSchema = require(script.Parent:WaitForChild("PlayerSchema"))
+local WorldService = require(script.Parent:WaitForChild("WorldService"))
+local ShopService = require(script.Parent:WaitForChild("ShopService"))
+local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
+local ToolService = require(script.Parent:WaitForChild("ToolService"))
 
 -- ==================== 參數設定 ====================
 local BLOCK_SIZE = MiningConfig.BlockSize
@@ -50,6 +54,25 @@ local BOMB_THROW_FLIGHT_TIME = MiningConfig.BombThrowFlightTime
 -- 寶箱可維護設定：新增等級只要複製一列，調整 id / minDepth / weight / color / health / reward。
 -- 視覺模型共用 ServerStorage.BOX，只依等級套用不同顏色。
 local CHEST_LEVELS = MiningConfig.ChestLevels
+
+WorldService.configure({
+	serverStorage = ServerStorage,
+	workspace = Workspace,
+	config = MiningConfig,
+	visuals = MiningVisuals,
+	modelFactory = ModelFactory,
+})
+ShopService.configure({
+	serverStorage = ServerStorage,
+	workspace = Workspace,
+	catalog = MiningCatalog,
+})
+PlayerDataService.configure({
+	playerSchema = PlayerSchema,
+})
+ToolService.configure({
+	modelFactory = ModelFactory,
+})
 
 local function getSteelFloor()
 	local shopModel = Workspace:FindFirstChild("MiningShopWorld")
@@ -254,17 +277,7 @@ local DEFAULT_CATALOG_IDS = {
 local ORE_LEVELS = MiningConfig.OreLevels
 
 local function getWorldAssetFolder()
-	local assets = ServerStorage:FindFirstChild(WORLD_ASSET_FOLDER_NAME) or Instance.new("Folder")
-	assets.Name = WORLD_ASSET_FOLDER_NAME
-	assets.Parent = ServerStorage
-	for _, name in ipairs({ "Tree", "Cactus", "Deadwood", "Pyramid", "Backpack" }) do
-		if not assets:FindFirstChild(name) then
-			local folder = Instance.new("Folder")
-			folder.Name = name
-			folder.Parent = assets
-		end
-	end
-	return assets
+	return WorldService.ensureEditableAssetFolders()
 end
 
 local function getSoundFolder()
@@ -343,12 +356,7 @@ local function readCatalogItemFromStorage(child)
 end
 
 local SHOP_CATALOG = MiningCatalog.getShopCatalog()
-local TOOL_PRICES = {}
-for _, catalogItem in ipairs(SHOP_CATALOG) do
-	if catalogItem.action == "BuyTool" then
-		TOOL_PRICES[catalogItem.item] = catalogItem.price
-	end
-end
+local TOOL_PRICES = ShopService.getToolPrices(SHOP_CATALOG)
 
 local getRuntimeShopCatalog
 
@@ -447,7 +455,7 @@ local function giveTool(player, toolName)
 		handle.Parent = tool
 	else
 		tool.RequiresHandle = true
-		local handle = ModelFactory.createToolFallback(toolName, TOOL_AUTO_MINE[toolName] == true)
+		local handle = ToolService.createFallbackHandle(toolName, TOOL_AUTO_MINE[toolName] == true)
 		handle.Parent = tool
 	end
 
@@ -526,7 +534,7 @@ local function updateBombTool(player, countName, toolBaseName, radius)
 		tool:SetAttribute("BombCountName", countName)
 		tool:SetAttribute("BombBaseName", toolBaseName)
 		tool:SetAttribute("BombRadius", radius)
-		local handle = ModelFactory.createBombHandle(radius)
+		local handle = ToolService.createBombHandle(radius)
 		handle.Parent = tool
 		tool.Parent = backpack
 	end
@@ -552,7 +560,7 @@ end
 local updateBackpackModel = function() end
 
 Players.PlayerAdded:Connect(function(player)
-	local playerValues = PlayerSchema.ensure(player, { MaxSand = MAX_BACKPACK_CAPPED })
+	local playerValues = PlayerDataService.ensurePlayerValues(player, { MaxSand = MAX_BACKPACK_CAPPED })
 	local leaderstats = playerValues.leaderstats
 	local money = playerValues.Coins
 	local totalBlocks = playerValues.TotalBlocks
