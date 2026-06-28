@@ -10,6 +10,8 @@ local MiningShared = ReplicatedStorage:WaitForChild("MiningShared")
 local MiningConfig = require(MiningShared:WaitForChild("Config"))
 local MiningRemotes = require(MiningShared:WaitForChild("Remotes"))
 local MiningCatalog = require(MiningShared:WaitForChild("Catalog"))
+local MiningVisuals = require(MiningShared:WaitForChild("Visuals"))
+local ModelFactory = require(MiningShared:WaitForChild("ModelFactory"))
 local PlayerSchema = require(script.Parent:WaitForChild("MiningServer"):WaitForChild("PlayerSchema"))
 
 -- ==================== 參數設定 ====================
@@ -445,26 +447,8 @@ local function giveTool(player, toolName)
 		handle.Parent = tool
 	else
 		tool.RequiresHandle = true
-		local handle = Instance.new("Part")
-		handle.Name = "Handle"
-		handle.Size = Vector3.new(0.4, 3, 0.4)
-		handle.Material = Enum.Material.Wood
-		handle.Color = Color3.fromRGB(125, 78, 38)
+		local handle = ModelFactory.createToolFallback(toolName, TOOL_AUTO_MINE[toolName] == true)
 		handle.Parent = tool
-
-		local head = Instance.new("Part")
-		head.Name = "ToolHead"
-		head.Size = TOOL_AUTO_MINE[toolName] and Vector3.new(1.2, 1.2, 1.2) or Vector3.new(2, 0.35, 0.35)
-		head.Material = (toolName == "鐵鎬" or toolName == "鐵鑽頭") and Enum.Material.Metal or ((toolName == "鑽石鎬" or toolName == "鑽石鑽頭") and Enum.Material.Neon or Enum.Material.Wood)
-		head.Color = (toolName == "鐵鎬" or toolName == "鐵鑽頭") and Color3.fromRGB(180, 185, 190) or ((toolName == "鑽石鎬" or toolName == "鑽石鑽頭") and Color3.fromRGB(45, 210, 235) or Color3.fromRGB(126, 78, 36))
-		head.Shape = TOOL_AUTO_MINE[toolName] and Enum.PartType.Ball or Enum.PartType.Block
-		head.CFrame = handle.CFrame * CFrame.new(0, 1.35, 0)
-		head.Parent = tool
-
-		local weld = Instance.new("WeldConstraint")
-		weld.Part0 = handle
-		weld.Part1 = head
-		weld.Parent = handle
 	end
 
 	tool.Parent = backpack
@@ -542,12 +526,7 @@ local function updateBombTool(player, countName, toolBaseName, radius)
 		tool:SetAttribute("BombCountName", countName)
 		tool:SetAttribute("BombBaseName", toolBaseName)
 		tool:SetAttribute("BombRadius", radius)
-		local handle = Instance.new("Part")
-		handle.Name = "Handle"
-		handle.Shape = Enum.PartType.Ball
-		handle.Size = Vector3.new(1.6, 1.6, 1.6)
-		handle.Material = (radius > 1) and Enum.Material.Metal or Enum.Material.Slate
-		handle.Color = (radius > 1) and Color3.fromRGB(120, 30, 30) or Color3.fromRGB(25, 25, 25)
+		local handle = ModelFactory.createBombHandle(radius)
 		handle.Parent = tool
 		tool.Parent = backpack
 	end
@@ -750,76 +729,9 @@ end)
 
 
 local function createCatalogModel(parent, itemData, pivotCFrame)
-	local model = Instance.new("Model")
-	model.Name = itemData.id .. "_Preview"
-	model.Parent = parent
-
-	local visual = itemData.model
-	local mainPart
-	if visual.kind == "pickaxe" then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "Handle"
-		mainPart.Size = Vector3.new(0.35, 3.2, 0.35)
-		mainPart.Material = Enum.Material.Wood
-		mainPart.Color = Color3.fromRGB(125, 78, 38)
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame * CFrame.Angles(0, 0, math.rad(25))
-		mainPart.Parent = model
-
-		local head = Instance.new("Part")
-		head.Name = "Head"
-		head.Size = Vector3.new(2.4, 0.35, 0.35)
-		head.Material = visual.material
-		head.Color = visual.color
-		head.Anchored = true
-		head.CFrame = mainPart.CFrame * CFrame.new(0, 1.35, 0)
-		head.Parent = model
-	elseif visual.kind == "bomb" then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "BombBody"
-		mainPart.Shape = Enum.PartType.Ball
-		mainPart.Size = Vector3.new(2.2, 2.2, 2.2)
-		mainPart.Material = visual.material
-		mainPart.Color = visual.color
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame
-		mainPart.Parent = model
-	elseif visual.kind == "backpack" then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "BackpackBody"
-		mainPart.Size = Vector3.new(2.2, 2.8, 1.2)
-		mainPart.Material = visual.material
-		mainPart.Color = visual.color
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame
-		mainPart.Parent = model
-	elseif itemData.sourceName then
-		local source = getItemStorageFolder():FindFirstChild(itemData.sourceName)
-			or (Workspace:FindFirstChild("LocalShopPreviewModels") and Workspace.LocalShopPreviewModels:FindFirstChild(itemData.sourceName))
-		if source then
-			local clone = source:Clone()
-			clone.Name = itemData.id .. "_Model"
-			clone.Parent = model
-			mainPart = clone:IsA("BasePart") and clone or clone:FindFirstChildWhichIsA("BasePart", true)
-			if mainPart then
-				model.PrimaryPart = mainPart
-				model:PivotTo(pivotCFrame)
-			end
-		end
-	end
-	if not mainPart then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "DisplayBlock"
-		mainPart.Size = visual.size or Vector3.new(2, 2, 2)
-		mainPart.Material = visual.material
-		mainPart.Color = visual.color
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame
-		mainPart.Parent = model
-	end
-
-	model.PrimaryPart = mainPart
-	return model
+	return ModelFactory.createCatalogModel(parent, itemData, pivotCFrame, {
+		sourceInstance = findCatalogSourceModel(itemData),
+	})
 end
 
 
@@ -849,8 +761,7 @@ local function createShopWorld()
 	createPartIfMissing("SecureFloor", function(secureFloor)
 		secureFloor.Size = STEEL_FLOOR_SIZE
 		secureFloor.Position = Vector3.new(0, -STEEL_FLOOR_SIZE.Y / 2, -25)
-		secureFloor.Material = Enum.Material.Metal
-		secureFloor.Color = Color3.fromRGB(125, 135, 145)
+		ModelFactory.applyStyle(secureFloor, MiningVisuals.Shop.SecureFloor)
 		secureFloor.Anchored = true
 		secureFloor.CanCollide = true
 	end)
@@ -858,16 +769,14 @@ local function createShopWorld()
 	createPartIfMissing("WoodDeck", function(deck)
 		deck.Size = Vector3.new(18, 0.4, 16)
 		deck.Position = SHOP_POSITION + Vector3.new(0, 0.2, -2)
-		deck.Material = Enum.Material.WoodPlanks
-		deck.Color = Color3.fromRGB(139, 92, 50)
+		ModelFactory.applyStyle(deck, MiningVisuals.Shop.WoodDeck)
 		deck.Anchored = true
 	end)
 
 	createPartIfMissing("CanvasCanopy", function(roof)
 		roof.Size = Vector3.new(22, 0.6, 18)
 		roof.Position = SHOP_POSITION + Vector3.new(0, 8, -2)
-		roof.Material = Enum.Material.Fabric
-		roof.Color = Color3.fromRGB(205, 60, 45)
+		ModelFactory.applyStyle(roof, MiningVisuals.Shop.CanvasCanopy)
 		roof.Anchored = true
 	end)
 
@@ -881,8 +790,7 @@ local function createShopWorld()
 		createPartIfMissing("ShedPost" .. index, function(post)
 			post.Size = Vector3.new(1, 8, 1)
 			post.Position = SHOP_POSITION + offset
-			post.Material = Enum.Material.Wood
-			post.Color = Color3.fromRGB(105, 68, 36)
+			ModelFactory.applyStyle(post, MiningVisuals.Shop.ShedPost)
 			post.Anchored = true
 		end)
 	end
@@ -891,8 +799,7 @@ local function createShopWorld()
 		shopZone.Shape = Enum.PartType.Cylinder
 		shopZone.Size = Vector3.new(0.25, 18, 18)
 		shopZone.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 0.08, 0)) * CFrame.Angles(0, 0, math.rad(90))
-		shopZone.Material = Enum.Material.Neon
-		shopZone.Color = Color3.fromRGB(80, 210, 255)
+		ModelFactory.applyStyle(shopZone, MiningVisuals.Shop.ShopOpenZone)
 		shopZone.Transparency = 0.55
 		shopZone.Anchored = true
 		shopZone.CanCollide = false
@@ -902,24 +809,21 @@ local function createShopWorld()
 	createPartIfMissing("ShopCounter", function(shopCounter)
 		shopCounter.Size = Vector3.new(8, 3, 2)
 		shopCounter.Position = SHOP_POSITION + Vector3.new(0, 1.5, -7)
-		shopCounter.Material = Enum.Material.WoodPlanks
-		shopCounter.Color = Color3.fromRGB(157, 107, 63)
+		ModelFactory.applyStyle(shopCounter, MiningVisuals.Shop.ShopCounter)
 		shopCounter.Anchored = true
 	end)
 
 	createPartIfMissing("ShopSign", function(sign)
 		sign.Size = Vector3.new(10, 2, 0.4)
 		sign.Position = SHOP_POSITION + Vector3.new(0, 6, -7.3)
-		sign.Material = Enum.Material.WoodPlanks
-		sign.Color = Color3.fromRGB(118, 74, 34)
+		ModelFactory.applyStyle(sign, MiningVisuals.Shop.ShopSign)
 		sign.Anchored = true
 	end)
 
 	createPartIfMissing("ShopPreviewBase", function(previewBase)
 		previewBase.Size = Vector3.new(10, 0.5, 10)
 		previewBase.Position = SHOP_PREVIEW_POSITION + Vector3.new(0, 0.25, 0)
-		previewBase.Material = Enum.Material.WoodPlanks
-		previewBase.Color = Color3.fromRGB(120, 75, 35)
+		ModelFactory.applyStyle(previewBase, MiningVisuals.Shop.ShopPreviewBase)
 		previewBase.Anchored = true
 	end)
 
@@ -963,8 +867,7 @@ local function createShopWorld()
 		base.Name = "ItemBackground"
 		base.Size = Vector3.new(4.8, 0.35, 3.8)
 		base.Position = SHOP_POSITION + Vector3.new(offsetX, 1.15, -11.5)
-		base.Material = Enum.Material.WoodPlanks
-		base.Color = Color3.fromRGB(91, 58, 31)
+		ModelFactory.applyStyle(base, MiningVisuals.Shop.ItemStand)
 		base.Anchored = true
 		base.Parent = itemStand
 		createCatalogModel(itemStand, catalogItem, CFrame.new(base.Position + Vector3.new(0, 2.2, 0)))
@@ -1386,17 +1289,20 @@ end
 
 getSurfaceBiome = function(bx, bz)
 	local n = math.noise(bx * 0.055, bz * 0.055, WORLD_SEED + 117)
+	local biomeName = "grass"
 	if n < -0.42 then
-		return "white_sand", Color3.fromRGB(238, 226, 196), Enum.Material.Sand
+		biomeName = "white_sand"
 	elseif n < -0.08 then
-		return "clay", Color3.fromRGB(150, 86, 58), Enum.Material.Ground
+		biomeName = "clay"
 	elseif n < 0.32 then
-		return "mud", Color3.fromRGB(104, 75, 49), Enum.Material.Mud
+		biomeName = "mud"
 	elseif n < 0.58 then
-		return "red_sand", Color3.fromRGB(198, 94, 58), Enum.Material.Sand
+		biomeName = "red_sand"
 	end
-	return "grass", Color3.fromRGB(75, 150, 70), Enum.Material.Grass
+	local biome = MiningVisuals.Biomes[biomeName] or MiningVisuals.Biomes.grass
+	return biomeName, biome.color, biome.material
 end
+
 
 local function shouldSpawnCactus(bx, bz)
 	local cactusNoise = math.noise(bx * 0.19, bz * 0.19, WORLD_SEED + 83)
@@ -1507,8 +1413,7 @@ local function instanceBlock(bx, by, bz)
 	local isSurface = by == getSurfaceHeight(bx, bz)
 	local biomeName = nil
 	if pyramid then
-		part.Material = Enum.Material.Sandstone
-		part.Color = Color3.fromRGB(214, 174, 94)
+		ModelFactory.applyStyle(part, MiningVisuals.Defaults.PyramidBlock)
 	elseif ore then
 		part.Material = ore.material
 		part.Color = ore.color
@@ -1524,8 +1429,7 @@ local function instanceBlock(bx, by, bz)
 		water.Name = "OasisWater"
 		water.Size = Vector3.new(BLOCK_SIZE * 0.9, 0.16, BLOCK_SIZE * 0.9)
 		water.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.09, 0)
-		water.Material = Enum.Material.Water
-		water.Color = Color3.fromRGB(55, 170, 185)
+		ModelFactory.applyStyle(water, MiningVisuals.Defaults.Water)
 		water.Transparency = 0.25
 		water.Anchored = true
 		water.CanCollide = false
@@ -1535,37 +1439,14 @@ local function instanceBlock(bx, by, bz)
 	if isSurface and biomeName == "grass" and shouldSpawnTree(bx, bz) then
 		local tree = cloneEditableWorldModel("Tree", blockModel, CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2, 0)))
 		if not tree then
-			local trunk = Instance.new("Part")
-			trunk.Name = "Tree"
-			trunk.Size = Vector3.new(1.1, 5, 1.1)
-			trunk.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 2.5, 0)
-			trunk.Material = Enum.Material.Wood
-			trunk.Color = Color3.fromRGB(95, 60, 32)
-			trunk.Anchored = true
-			trunk.Parent = blockModel
-			local leaves = Instance.new("Part")
-			leaves.Name = "Leaves"
-			leaves.Shape = Enum.PartType.Ball
-			leaves.Size = Vector3.new(4.4, 4.4, 4.4)
-			leaves.Position = trunk.Position + Vector3.new(0, 3.2, 0)
-			leaves.Material = Enum.Material.Grass
-			leaves.Color = Color3.fromRGB(55, 135, 55)
-			leaves.Anchored = true
-			leaves.Parent = blockModel
+			ModelFactory.createFallbackTree(blockModel, part.Position, BLOCK_SIZE)
 		end
 	end
 
 	if isSurface and shouldSpawnDeadwood(bx, bz) then
 		local editableDeadwood = cloneEditableWorldModel("Deadwood", blockModel, CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.3, 0)))
 		if not editableDeadwood then
-			local log = Instance.new("Part")
-		log.Name = "Deadwood"
-		log.Size = Vector3.new(math.random(22, 34) / 10, 0.45, 0.45)
-		log.CFrame = CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.3, 0)) * CFrame.Angles(math.rad(math.random(-8, 8)), math.rad(math.random(0, 180)), math.rad(math.random(-8, 8)))
-		log.Material = Enum.Material.Wood
-		log.Color = Color3.fromRGB(92, 63, 39)
-		log.Anchored = true
-			log.Parent = blockModel
+			ModelFactory.createFallbackDeadwood(blockModel, part.Position, BLOCK_SIZE)
 		end
 	end
 
@@ -1575,14 +1456,8 @@ local function instanceBlock(bx, by, bz)
 			spawnedParts[key] = blockModel
 			return
 		end
-		local cactus = Instance.new("Part")
-		cactus.Name = "Cactus"
-		cactus.Size = Vector3.new(1.6, math.random(4, 7) * CACTUS_HEIGHT_SCALE, 1.6)
-		cactus.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + cactus.Size.Y / 2, 0)
-		cactus.Material = Enum.Material.Grass
-		cactus.Color = Color3.fromRGB(35, 135, 55)
-		cactus.Anchored = true
-		cactus.Parent = blockModel
+		local height = math.random(4, 7) * CACTUS_HEIGHT_SCALE
+		ModelFactory.createFallbackCactus(blockModel, part.Position, BLOCK_SIZE, height)
 	end
 
 	spawnedParts[key] = blockModel

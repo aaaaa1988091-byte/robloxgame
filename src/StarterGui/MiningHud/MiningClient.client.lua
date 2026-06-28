@@ -20,6 +20,7 @@ local SHOP_SLOT_TWEEN = 0.32
 
 local MiningShared = ReplicatedStorage:WaitForChild("MiningShared")
 local MiningRemotes = require(MiningShared:WaitForChild("Remotes"))
+local ModelFactory = require(MiningShared:WaitForChild("ModelFactory"))
 local sendNotificationEvent = MiningRemotes.wait("SendNotification")
 local teleportEvent = MiningRemotes.wait("TeleportToShop")
 local shopActionEvent = MiningRemotes.wait("ShopAction")
@@ -397,80 +398,21 @@ if not localPreviewFolder then
 end
 
 local function createLocalPreviewModel(item, index)
-	local modelData = item.model or {}
-	local model = Instance.new("Model")
-	model.Name = "LocalPreview_" .. item.id
-	model.Parent = localPreviewFolder
-
-	local mainPart
-	local function setupPart(part)
-		part.Anchored = true
-		part.CanCollide = false
-		part:SetAttribute("ShopIndex", index)
-		part.Parent = model
-		return part
-	end
-
-	local source = item.sourceName and localPreviewFolder:FindFirstChild(item.sourceName)
-	if source then
-		local clone = source:Clone()
-		clone.Name = "DisplayModel"
-		clone.Parent = model
-		mainPart = clone:IsA("BasePart") and clone or clone:FindFirstChildWhichIsA("BasePart", true)
-		if mainPart then
-			model.PrimaryPart = mainPart
-			model:PivotTo(CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new((index - 1) * 5, 3, 0)))
+	local pivot = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new((index - 1) * 5, 3, 0))
+	local model = ModelFactory.createCatalogModel(localPreviewFolder, item, pivot, {
+		name = "LocalPreview_" .. item.id,
+		sourceFolder = localPreviewFolder,
+	})
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant:SetAttribute("ShopIndex", index)
 		end
 	end
-	if mainPart then
-		for _, descendant in ipairs(model:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				descendant.Anchored = true
-				descendant.CanCollide = false
-				descendant:SetAttribute("ShopIndex", index)
-			end
-		end
-	elseif modelData.kind == "pickaxe" then
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "Handle"
-		mainPart.Size = Vector3.new(0.35, 3.2, 0.35)
-		mainPart.Material = Enum.Material.Wood
-		mainPart.Color = Color3.fromRGB(125, 78, 38)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0)) * CFrame.Angles(0, 0, math.rad(25))
-
-		local head = setupPart(Instance.new("Part"))
-		head.Name = "Head"
-		head.Size = Vector3.new(2.4, 0.35, 0.35)
-		head.Material = modelData.material or Enum.Material.Wood
-		head.Color = modelData.color or Color3.fromRGB(150, 100, 50)
-		head.CFrame = mainPart.CFrame * CFrame.new(0, 1.35, 0)
-	elseif modelData.kind == "bomb" then
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "BombBody"
-		mainPart.Shape = Enum.PartType.Ball
-		mainPart.Size = Vector3.new(2.2, 2.2, 2.2)
-		mainPart.Material = modelData.material or Enum.Material.Slate
-		mainPart.Color = modelData.color or Color3.fromRGB(25, 25, 25)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
-	elseif modelData.kind == "backpack" then
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "BackpackBody"
-		mainPart.Size = Vector3.new(2.2, 2.8, 1.2)
-		mainPart.Material = modelData.material or Enum.Material.Fabric
-		mainPart.Color = modelData.color or Color3.fromRGB(85, 135, 210)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
-	else
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "DisplayBlock"
-		mainPart.Size = modelData.size or Vector3.new(2, 2, 2)
-		mainPart.Material = modelData.material or Enum.Material.Sand
-		mainPart.Color = modelData.color or Color3.fromRGB(235, 205, 130)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
-	end
-
-	model.PrimaryPart = mainPart
 	return model
 end
+
 
 
 local function refreshCatalogAndPreviews()
