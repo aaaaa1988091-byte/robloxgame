@@ -18,22 +18,25 @@ local mouse = player:GetMouse()
 local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0)
 local SHOP_SLOT_TWEEN = 0.32
 
-local sendNotificationEvent = ReplicatedStorage:WaitForChild("SendNotification")
-local teleportEvent = ReplicatedStorage:WaitForChild("TeleportToShop")
-local shopActionEvent = ReplicatedStorage:WaitForChild("ShopAction")
-local miningEvent = ReplicatedStorage:WaitForChild("MiningEvent")
-local rewardEmojiEvent = ReplicatedStorage:WaitForChild("RewardEmojiEvent")
-local abilityDraftEvent = ReplicatedStorage:WaitForChild("AbilityDraftEvent")
-local weatherEvent = ReplicatedStorage:WaitForChild("WeatherEvent")
-local potionActionEvent = ReplicatedStorage:WaitForChild("PotionActionEvent")
-local questActionEvent = ReplicatedStorage:WaitForChild("QuestActionEvent")
-local questStateFunction = ReplicatedStorage:WaitForChild("GetQuestState")
-local shopCatalogFunction = ReplicatedStorage:WaitForChild("GetShopCatalog")
-local shopStateFunction = ReplicatedStorage:WaitForChild("GetShopState")
+local MiningShared = ReplicatedStorage:WaitForChild("MiningShared")
+local MiningRemotes = require(MiningShared:WaitForChild("Remotes"))
+local ModelFactory = require(MiningShared:WaitForChild("ModelFactory"))
+local sendNotificationEvent = MiningRemotes.wait("SendNotification")
+local teleportEvent = MiningRemotes.wait("TeleportToShop")
+local shopActionEvent = MiningRemotes.wait("ShopAction")
+local miningEvent = MiningRemotes.wait("MiningEvent")
+local rewardEmojiEvent = MiningRemotes.wait("RewardEmojiEvent")
+local abilityDraftEvent = MiningRemotes.wait("AbilityDraftEvent")
+local weatherEvent = MiningRemotes.wait("WeatherEvent")
+local potionActionEvent = MiningRemotes.wait("PotionActionEvent")
+local questActionEvent = MiningRemotes.wait("QuestActionEvent")
+local questStateFunction = MiningRemotes.wait("GetQuestState")
+local shopCatalogFunction = MiningRemotes.wait("GetShopCatalog")
+local shopStateFunction = MiningRemotes.wait("GetShopState")
 local nextWorldRefreshTimeValue = ReplicatedStorage:WaitForChild("NextWorldRefreshTime")
 
 local playerGui = player:WaitForChild("PlayerGui")
-local gui = playerGui:FindFirstChild("MiningHud")
+local gui = script:FindFirstAncestorOfClass("ScreenGui") or playerGui:FindFirstChild("MiningHud")
 if not gui then
 	local starterTemplate = StarterGui:FindFirstChild("MiningHud")
 	if starterTemplate then
@@ -175,8 +178,7 @@ homeButton.MouseButton1Click:Connect(function()
 end)
 
 
-local sideMenu = Instance.new("Frame")
-sideMenu.Name = "FeatureMenu"
+local sideMenu = getOrCreateChild(gui, "Frame", "FeatureMenu")
 sideMenu.Size = UDim2.fromOffset(132, 276)
 sideMenu.Position = UDim2.fromOffset(16, 210)
 sideMenu.BackgroundTransparency = 1
@@ -185,8 +187,7 @@ local featurePanels = {}
 local refreshQuestPanel = function() end
 
 local function makeFeaturePanel(key, titleText, bodyText)
-	local panel = Instance.new("Frame")
-	panel.Name = key .. "Panel"
+	local panel, panelCreated = getOrCreateChild(gui, "Frame", key .. "Panel")
 	panel.AnchorPoint = Vector2.new(0.5, 0.5)
 	panel.Size = UDim2.fromOffset(360, 240)
 	panel.Position = UDim2.fromScale(0.5, 0.5)
@@ -194,8 +195,8 @@ local function makeFeaturePanel(key, titleText, bodyText)
 	panel.Visible = false
 	panel.Parent = gui
 	registerModal(panel)
-	addCorner(panel, 18)
-	local titleLabel = Instance.new("TextLabel")
+	if panelCreated then addCorner(panel, 18) end
+	local titleLabel = getOrCreateChild(panel, "TextLabel", "Title")
 	titleLabel.Size = UDim2.new(1, -20, 0, 46)
 	titleLabel.Position = UDim2.fromOffset(10, 8)
 	titleLabel.BackgroundTransparency = 1
@@ -203,8 +204,7 @@ local function makeFeaturePanel(key, titleText, bodyText)
 	titleLabel.TextColor3 = Color3.fromRGB(255, 232, 170)
 	titleLabel.TextScaled = true
 	titleLabel.Parent = panel
-	local body = Instance.new("TextLabel")
-	body.Name = "Body"
+	local body = getOrCreateChild(panel, "TextLabel", "Body")
 	body.Size = UDim2.new(1, -34, 1, -70)
 	body.Position = UDim2.fromOffset(17, 58)
 	body.BackgroundTransparency = 1
@@ -398,80 +398,21 @@ if not localPreviewFolder then
 end
 
 local function createLocalPreviewModel(item, index)
-	local modelData = item.model or {}
-	local model = Instance.new("Model")
-	model.Name = "LocalPreview_" .. item.id
-	model.Parent = localPreviewFolder
-
-	local mainPart
-	local function setupPart(part)
-		part.Anchored = true
-		part.CanCollide = false
-		part:SetAttribute("ShopIndex", index)
-		part.Parent = model
-		return part
-	end
-
-	local source = item.sourceName and localPreviewFolder:FindFirstChild(item.sourceName)
-	if source then
-		local clone = source:Clone()
-		clone.Name = "DisplayModel"
-		clone.Parent = model
-		mainPart = clone:IsA("BasePart") and clone or clone:FindFirstChildWhichIsA("BasePart", true)
-		if mainPart then
-			model.PrimaryPart = mainPart
-			model:PivotTo(CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new((index - 1) * 5, 3, 0)))
+	local pivot = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new((index - 1) * 5, 3, 0))
+	local model = ModelFactory.createCatalogModel(localPreviewFolder, item, pivot, {
+		name = "LocalPreview_" .. item.id,
+		sourceFolder = localPreviewFolder,
+	})
+	for _, descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant:SetAttribute("ShopIndex", index)
 		end
 	end
-	if mainPart then
-		for _, descendant in ipairs(model:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				descendant.Anchored = true
-				descendant.CanCollide = false
-				descendant:SetAttribute("ShopIndex", index)
-			end
-		end
-	elseif modelData.kind == "pickaxe" then
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "Handle"
-		mainPart.Size = Vector3.new(0.35, 3.2, 0.35)
-		mainPart.Material = Enum.Material.Wood
-		mainPart.Color = Color3.fromRGB(125, 78, 38)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0)) * CFrame.Angles(0, 0, math.rad(25))
-
-		local head = setupPart(Instance.new("Part"))
-		head.Name = "Head"
-		head.Size = Vector3.new(2.4, 0.35, 0.35)
-		head.Material = modelData.material or Enum.Material.Wood
-		head.Color = modelData.color or Color3.fromRGB(150, 100, 50)
-		head.CFrame = mainPart.CFrame * CFrame.new(0, 1.35, 0)
-	elseif modelData.kind == "bomb" then
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "BombBody"
-		mainPart.Shape = Enum.PartType.Ball
-		mainPart.Size = Vector3.new(2.2, 2.2, 2.2)
-		mainPart.Material = modelData.material or Enum.Material.Slate
-		mainPart.Color = modelData.color or Color3.fromRGB(25, 25, 25)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
-	elseif modelData.kind == "backpack" then
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "BackpackBody"
-		mainPart.Size = Vector3.new(2.2, 2.8, 1.2)
-		mainPart.Material = modelData.material or Enum.Material.Fabric
-		mainPart.Color = modelData.color or Color3.fromRGB(85, 135, 210)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
-	else
-		mainPart = setupPart(Instance.new("Part"))
-		mainPart.Name = "DisplayBlock"
-		mainPart.Size = modelData.size or Vector3.new(2, 2, 2)
-		mainPart.Material = modelData.material or Enum.Material.Sand
-		mainPart.Color = modelData.color or Color3.fromRGB(235, 205, 130)
-		mainPart.CFrame = CFrame.new(SHOP_PREVIEW_POSITION + Vector3.new(0, 3, 0))
-	end
-
-	model.PrimaryPart = mainPart
 	return model
 end
+
 
 
 local function refreshCatalogAndPreviews()

@@ -2,51 +2,77 @@ local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
-local StarterGui = game:GetService("StarterGui")
 local Debris = game:GetService("Debris")
 local TweenService = game:GetService("TweenService")
 local DataStoreService = game:GetService("DataStoreService")
 
+local MiningShared = ReplicatedStorage:WaitForChild("MiningShared")
+local MiningConfig = require(MiningShared:WaitForChild("Config"))
+local MiningRemotes = require(MiningShared:WaitForChild("Remotes"))
+local MiningCatalog = require(MiningShared:WaitForChild("Catalog"))
+local MiningVisuals = require(MiningShared:WaitForChild("Visuals"))
+local ModelFactory = require(MiningShared:WaitForChild("ModelFactory"))
+local PlayerSchema = require(script.Parent:WaitForChild("PlayerSchema"))
+local WorldService = require(script.Parent:WaitForChild("WorldService"))
+local ShopService = require(script.Parent:WaitForChild("ShopService"))
+local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
+local ToolService = require(script.Parent:WaitForChild("ToolService"))
+
 -- ==================== 參數設定 ====================
-local BLOCK_SIZE = 4
-local CHUNK_RADIUS_XZ = 22
-local CHUNK_RADIUS_Y = 8
-local MAX_DEPTH_BLOCKS = 4000
-local CHEST_CHANCE = 0.02
-local PYRAMID_CHANCE = 0.00035
-local STEEL_FLOOR_SIZE = Vector3.new(10, 1, 10)
-local NOISE_SCALE = 0.075
-local HILL_HEIGHT_BLOCKS = 9
-local CACTUS_CHANCE = 0.02
-local DEADWOOD_CHANCE = 0.035
-local OASIS_CHANCE = 0.018
-local TREE_CHANCE = 0.028
-local CACTUS_HEIGHT_SCALE = 2.2
-local MINING_DEBRIS_COUNT = 18
-local MAX_BACKPACK_CAPPED = 20
-local BACKPACK_UPGRADE_AMOUNT = 20
-local PET_MINE_RADIUS_BLOCKS = 2
-local PET_MINE_INTERVAL = 7
-local WORLD_REFRESH_SECONDS = 5 * 60
+local BLOCK_SIZE = MiningConfig.BlockSize
+local CHUNK_RADIUS_XZ = MiningConfig.ChunkRadiusXZ
+local CHUNK_RADIUS_Y = MiningConfig.ChunkRadiusY
+local MAX_DEPTH_BLOCKS = MiningConfig.MaxDepthBlocks
+local CHEST_CHANCE = MiningConfig.ChestChance
+local PYRAMID_CHANCE = MiningConfig.PyramidChance
+local STEEL_FLOOR_SIZE = MiningConfig.SteelFloorSize
+local NOISE_SCALE = MiningConfig.NoiseScale
+local HILL_HEIGHT_BLOCKS = MiningConfig.HillHeightBlocks
+local CACTUS_CHANCE = MiningConfig.CactusChance
+local DEADWOOD_CHANCE = MiningConfig.DeadwoodChance
+local OASIS_CHANCE = MiningConfig.OasisChance
+local TREE_CHANCE = MiningConfig.TreeChance
+local CACTUS_HEIGHT_SCALE = MiningConfig.CactusHeightScale
+local MINING_DEBRIS_COUNT = MiningConfig.MiningDebrisCount
+local MAX_BACKPACK_CAPPED = MiningConfig.MaxBackpackCapped
+local BACKPACK_UPGRADE_AMOUNT = MiningConfig.BackpackUpgradeAmount
+local PET_MINE_RADIUS_BLOCKS = MiningConfig.PetMineRadiusBlocks
+local PET_MINE_INTERVAL = MiningConfig.PetMineInterval
+local WORLD_REFRESH_SECONDS = MiningConfig.WorldRefreshSeconds
 local PLAYER_DATA_STORE = DataStoreService:GetDataStore("DynamicMiningWorldPlayerDataV2")
 
-local SHOP_POSITION = Vector3.new(0, 0, -25)
-local SHOP_PREVIEW_POSITION = Vector3.new(0, 10000, 0) -- 高空本地預覽
+local SHOP_POSITION = MiningConfig.ShopPosition
+local SHOP_PREVIEW_POSITION = MiningConfig.ShopPreviewPosition -- 高空本地預覽
 local WORLD_SEED = math.random(1, 1000000)
 local lastShopTeleportAt = {}
 local activeBackpackModels = {}
 local playerAbilityState = {}
 local pendingAbilityDrafts = {}
 local currentWeather = "Clear"
-local BOMB_THROW_FLIGHT_TIME = 0.42
+local BOMB_THROW_FLIGHT_TIME = MiningConfig.BombThrowFlightTime
 
 -- 寶箱可維護設定：新增等級只要複製一列，調整 id / minDepth / weight / color / health / reward。
 -- 視覺模型共用 ServerStorage.BOX，只依等級套用不同顏色。
-local CHEST_LEVELS = {
-	{ id = "common", minDepth = 0, weight = 70, color = Color3.fromRGB(180, 130, 65), health = 18, reward = { 50, 180 }, emoji = "🪙" },
-	{ id = "rare", minDepth = 35, weight = 24, color = Color3.fromRGB(70, 150, 255), health = 42, reward = { 180, 520 }, emoji = "💎" },
-	{ id = "epic", minDepth = 120, weight = 6, color = Color3.fromRGB(190, 80, 255), health = 90, reward = { 520, 1400 }, emoji = "👑" },
-}
+local CHEST_LEVELS = MiningConfig.ChestLevels
+
+WorldService.configure({
+	serverStorage = ServerStorage,
+	workspace = Workspace,
+	config = MiningConfig,
+	visuals = MiningVisuals,
+	modelFactory = ModelFactory,
+})
+ShopService.configure({
+	serverStorage = ServerStorage,
+	workspace = Workspace,
+	catalog = MiningCatalog,
+})
+PlayerDataService.configure({
+	playerSchema = PlayerSchema,
+})
+ToolService.configure({
+	modelFactory = ModelFactory,
+})
 
 local function getSteelFloor()
 	local shopModel = Workspace:FindFirstChild("MiningShopWorld")
@@ -80,29 +106,20 @@ local worldData = {}
 local spawnedParts = {}
 local blockHealthData = {}
 
--- 建立與獲取網路事件 (確保在最前端正確註冊)
-local function getRemote(className, name)
-	local remote = ReplicatedStorage:FindFirstChild(name)
-	if not remote then
-		remote = Instance.new(className)
-		remote.Name = name
-		remote.Parent = ReplicatedStorage
-	end
-	return remote
-end
-
-local sendNotificationEvent = getRemote("RemoteEvent", "SendNotification")
-local teleportEvent = getRemote("RemoteEvent", "TeleportToShop")
-local shopActionEvent = getRemote("RemoteEvent", "ShopAction")
-local miningEvent = getRemote("RemoteEvent", "MiningEvent")
-local rewardEmojiEvent = getRemote("RemoteEvent", "RewardEmojiEvent")
-local abilityDraftEvent = getRemote("RemoteEvent", "AbilityDraftEvent")
-local weatherEvent = getRemote("RemoteEvent", "WeatherEvent")
-local potionActionEvent = getRemote("RemoteEvent", "PotionActionEvent")
-local questActionEvent = getRemote("RemoteEvent", "QuestActionEvent")
-local questStateFunction = getRemote("RemoteFunction", "GetQuestState")
-local shopCatalogFunction = getRemote("RemoteFunction", "GetShopCatalog")
-local shopStateFunction = getRemote("RemoteFunction", "GetShopState")
+-- 建立與獲取網路事件：所有 Remote 名稱集中在 ReplicatedStorage.MiningShared.Remotes。
+local miningRemotes = MiningRemotes.ensureAll()
+local sendNotificationEvent = miningRemotes.SendNotification
+local teleportEvent = miningRemotes.TeleportToShop
+local shopActionEvent = miningRemotes.ShopAction
+local miningEvent = miningRemotes.MiningEvent
+local rewardEmojiEvent = miningRemotes.RewardEmojiEvent
+local abilityDraftEvent = miningRemotes.AbilityDraftEvent
+local weatherEvent = miningRemotes.WeatherEvent
+local potionActionEvent = miningRemotes.PotionActionEvent
+local questActionEvent = miningRemotes.QuestActionEvent
+local questStateFunction = miningRemotes.GetQuestState
+local shopCatalogFunction = miningRemotes.GetShopCatalog
+local shopStateFunction = miningRemotes.GetShopState
 
 local nextWorldRefreshTimeValue = ReplicatedStorage:FindFirstChild("NextWorldRefreshTime") or Instance.new("IntValue")
 nextWorldRefreshTimeValue.Name = "NextWorldRefreshTime"
@@ -194,24 +211,13 @@ local function recordPropQuestProgress(player, blockModel)
 end
 
 -- ==================== 1. 玩家數據與工具系統 ====================
-local TOOL_EFFICIENCY = {
-	["拳頭"] = 5,
-	["木鎬"] = 20,
-	["鐵鎬"] = 50,
-	["鑽石鎬"] = 100,
-	["鐵鑽頭"] = 35,
-	["鑽石鑽頭"] = 80,
-}
+local TOOL_EFFICIENCY = MiningConfig.ToolEfficiency
+local TOOL_AUTO_MINE = MiningConfig.ToolAutoMine
 
-local TOOL_AUTO_MINE = {
-	["鐵鑽頭"] = true,
-	["鑽石鑽頭"] = true,
-}
+local PICKAXE_NAMES = MiningConfig.PickaxeNames
+local BOMB_TOOL_NAME = MiningConfig.BombToolName
+local CLUSTER_BOMB_TOOL_NAME = MiningConfig.ClusterBombToolName
 
-
-local PICKAXE_NAMES = { "木鎬", "鐵鎬", "鑽石鎬", "鐵鑽頭", "鑽石鑽頭" }
-local BOMB_TOOL_NAME = "💣 炸彈"
-local CLUSTER_BOMB_TOOL_NAME = "💥 集束炸彈"
 local playerMiningState = {}
 local activePetModels = {}
 local activePetLoops = {}
@@ -268,27 +274,10 @@ local DEFAULT_CATALOG_IDS = {
 }
 
 
-local ORE_LEVELS = {
-	Coal = { name = "煤炭", minDepth = 20, chance = 0.010, color = Color3.fromRGB(35, 35, 35), material = Enum.Material.Slate, blocks = 80 },
-	Copper = { name = "銅", minDepth = 45, chance = 0.0075, color = Color3.fromRGB(184, 103, 45), material = Enum.Material.Metal, blocks = 180 },
-	Iron = { name = "鐵", minDepth = 80, chance = 0.0058, color = Color3.fromRGB(160, 165, 170), material = Enum.Material.Metal, blocks = 350 },
-	Silver = { name = "銀", minDepth = 130, chance = 0.0038, color = Color3.fromRGB(210, 215, 225), material = Enum.Material.Metal, blocks = 800 },
-	Gold = { name = "金", minDepth = 210, chance = 0.0022, color = Color3.fromRGB(255, 210, 70), material = Enum.Material.Metal, blocks = 1400 },
-	Diamond = { name = "鑽石", minDepth = 320, chance = 0.0010, color = Color3.fromRGB(70, 235, 255), material = Enum.Material.Neon, blocks = 3000 },
-}
+local ORE_LEVELS = MiningConfig.OreLevels
 
 local function getWorldAssetFolder()
-	local assets = ServerStorage:FindFirstChild(WORLD_ASSET_FOLDER_NAME) or Instance.new("Folder")
-	assets.Name = WORLD_ASSET_FOLDER_NAME
-	assets.Parent = ServerStorage
-	for _, name in ipairs({ "Tree", "Cactus", "Deadwood", "Pyramid", "Backpack" }) do
-		if not assets:FindFirstChild(name) then
-			local folder = Instance.new("Folder")
-			folder.Name = name
-			folder.Parent = assets
-		end
-	end
-	return assets
+	return WorldService.ensureEditableAssetFolders()
 end
 
 local function getSoundFolder()
@@ -366,131 +355,8 @@ local function readCatalogItemFromStorage(child)
 	}
 end
 
-local SHOP_CATALOG = {
-	{
-		id = "sell_sand",
-		name = "出售沙子",
-		description = "把背包裡的沙子全部換成金幣，每顆 +5。",
-		action = "Sell",
-		item = "",
-		price = 0,
-		model = { kind = "block", size = Vector3.new(2.5, 2.5, 2.5), color = Color3.fromRGB(235, 205, 130), material = Enum.Material.Sand },
-	},
-
-	{
-		id = "fists",
-		name = "空手",
-		description = "不拿鎬子，切回空手狀態。已購買的工具會保留，可隨時再裝備。",
-		action = "BuyTool",
-		item = "拳頭",
-		price = 0,
-		model = { kind = "block", size = Vector3.new(1.5, 1.5, 1.5), color = Color3.fromRGB(245, 210, 170), material = Enum.Material.SmoothPlastic },
-	},
-	{
-		id = "wood_pickaxe",
-		name = "木鎬",
-		description = "工具強度 20 / 秒，適合開始挖深一點。",
-		action = "BuyTool",
-		item = "木鎬",
-		price = 150,
-		model = { kind = "pickaxe", color = Color3.fromRGB(126, 78, 36), material = Enum.Material.Wood },
-	},
-	{
-		id = "iron_pickaxe",
-		name = "鐵鎬",
-		description = "工具強度 50 / 秒，更快打穿中層沙子。",
-		action = "BuyTool",
-		item = "鐵鎬",
-		price = 500,
-		model = { kind = "pickaxe", color = Color3.fromRGB(180, 185, 190), material = Enum.Material.Metal },
-	},
-	{
-		id = "diamond_pickaxe",
-		name = "鑽石鎬",
-		description = "工具強度 100 / 秒，深層挖礦核心裝備。",
-		action = "BuyTool",
-		item = "鑽石鎬",
-		price = 1500,
-		model = { kind = "pickaxe", color = Color3.fromRGB(45, 210, 235), material = Enum.Material.Neon },
-	},
-	{
-		id = "iron_drill",
-		name = "鐵鑽頭",
-		description = "自動工具：按住即可連續挖掘，工具強度 35 / 秒。",
-		action = "BuyTool",
-		item = "鐵鑽頭",
-		price = 3000,
-		model = { kind = "pickaxe", color = Color3.fromRGB(140, 150, 160), material = Enum.Material.Metal },
-	},
-	{
-		id = "diamond_drill",
-		name = "鑽石鑽頭",
-		description = "高級自動工具：按住即可連續挖掘，工具強度 80 / 秒。",
-		action = "BuyTool",
-		item = "鑽石鑽頭",
-		price = 9000,
-		model = { kind = "pickaxe", color = Color3.fromRGB(65, 240, 255), material = Enum.Material.Neon },
-	},
-	{
-		id = "bomb",
-		name = "炸彈",
-		description = "可無限重複購買。投擲後以拋物線飛出並爆炸。",
-		action = "BuyBomb",
-		item = "",
-		price = 50,
-		model = { kind = "bomb", color = Color3.fromRGB(25, 25, 25), material = Enum.Material.Slate },
-	},
-	{
-		id = "cluster_bomb",
-		name = "集束炸彈",
-		description = "高級炸彈：價格為普通炸彈 3 倍，可堆疊，爆炸範圍更大。",
-		action = "BuyBomb",
-		item = "ClusterBombCount",
-		price = 150,
-		model = { kind = "bomb", color = Color3.fromRGB(120, 30, 30), material = Enum.Material.Metal },
-	},
-	{
-		id = "sand_pet",
-		name = "沙漠小蜥蜴",
-		description = "會跟著你，並且每隔一段時間慢慢吃掉附近一顆沙子。",
-		action = "BuyPet",
-		item = "SandPet",
-		price = 2500,
-		model = { kind = "bomb", color = Color3.fromRGB(210, 170, 75), material = Enum.Material.SmoothPlastic },
-	},
-}
-
-local BACKPACK_CATALOG = {
-	{ id = "small_backpack", name = "小背包", capacity = 40, price = 250, color = Color3.fromRGB(95, 140, 205) },
-	{ id = "trail_backpack", name = "旅行背包", capacity = 70, price = 650, color = Color3.fromRGB(75, 170, 120) },
-	{ id = "miner_backpack", name = "礦工背包", capacity = 110, price = 1300, color = Color3.fromRGB(180, 130, 65) },
-	{ id = "wide_backpack", name = "寬口背包", capacity = 160, price = 2300, color = Color3.fromRGB(200, 90, 75) },
-	{ id = "steel_backpack", name = "鋼架背包", capacity = 230, price = 3800, color = Color3.fromRGB(130, 145, 160) },
-	{ id = "desert_backpack", name = "沙漠背包", capacity = 320, price = 5600, color = Color3.fromRGB(220, 180, 95) },
-	{ id = "crystal_backpack", name = "水晶背包", capacity = 450, price = 8200, color = Color3.fromRGB(90, 220, 240) },
-	{ id = "royal_backpack", name = "皇家背包", capacity = 620, price = 12000, color = Color3.fromRGB(175, 95, 230) },
-	{ id = "void_backpack", name = "虛空背包", capacity = 850, price = 17500, color = Color3.fromRGB(45, 45, 75) },
-	{ id = "endless_backpack", name = "無盡背包", capacity = 1200, price = 26000, color = Color3.fromRGB(255, 220, 90) },
-}
-
-for _, backpack in ipairs(BACKPACK_CATALOG) do
-	table.insert(SHOP_CATALOG, {
-		id = backpack.id,
-		name = backpack.name,
-		description = "購買後背包容量變為 " .. backpack.capacity .. "。背包和鎬子一樣是直接購買不同大小。",
-		action = "BuyBackpack",
-		item = tostring(backpack.capacity),
-		price = backpack.price,
-		model = { kind = "backpack", color = backpack.color, material = Enum.Material.Fabric },
-	})
-end
-
-local TOOL_PRICES = {}
-for _, catalogItem in ipairs(SHOP_CATALOG) do
-	if catalogItem.action == "BuyTool" then
-		TOOL_PRICES[catalogItem.item] = catalogItem.price
-	end
-end
+local SHOP_CATALOG = MiningCatalog.getShopCatalog()
+local TOOL_PRICES = ShopService.getToolPrices(SHOP_CATALOG)
 
 local getRuntimeShopCatalog
 
@@ -589,26 +455,8 @@ local function giveTool(player, toolName)
 		handle.Parent = tool
 	else
 		tool.RequiresHandle = true
-		local handle = Instance.new("Part")
-		handle.Name = "Handle"
-		handle.Size = Vector3.new(0.4, 3, 0.4)
-		handle.Material = Enum.Material.Wood
-		handle.Color = Color3.fromRGB(125, 78, 38)
+		local handle = ToolService.createFallbackHandle(toolName, TOOL_AUTO_MINE[toolName] == true)
 		handle.Parent = tool
-
-		local head = Instance.new("Part")
-		head.Name = "ToolHead"
-		head.Size = TOOL_AUTO_MINE[toolName] and Vector3.new(1.2, 1.2, 1.2) or Vector3.new(2, 0.35, 0.35)
-		head.Material = (toolName == "鐵鎬" or toolName == "鐵鑽頭") and Enum.Material.Metal or ((toolName == "鑽石鎬" or toolName == "鑽石鑽頭") and Enum.Material.Neon or Enum.Material.Wood)
-		head.Color = (toolName == "鐵鎬" or toolName == "鐵鑽頭") and Color3.fromRGB(180, 185, 190) or ((toolName == "鑽石鎬" or toolName == "鑽石鑽頭") and Color3.fromRGB(45, 210, 235) or Color3.fromRGB(126, 78, 36))
-		head.Shape = TOOL_AUTO_MINE[toolName] and Enum.PartType.Ball or Enum.PartType.Block
-		head.CFrame = handle.CFrame * CFrame.new(0, 1.35, 0)
-		head.Parent = tool
-
-		local weld = Instance.new("WeldConstraint")
-		weld.Part0 = handle
-		weld.Part1 = head
-		weld.Parent = handle
 	end
 
 	tool.Parent = backpack
@@ -686,12 +534,7 @@ local function updateBombTool(player, countName, toolBaseName, radius)
 		tool:SetAttribute("BombCountName", countName)
 		tool:SetAttribute("BombBaseName", toolBaseName)
 		tool:SetAttribute("BombRadius", radius)
-		local handle = Instance.new("Part")
-		handle.Name = "Handle"
-		handle.Shape = Enum.PartType.Ball
-		handle.Size = Vector3.new(1.6, 1.6, 1.6)
-		handle.Material = (radius > 1) and Enum.Material.Metal or Enum.Material.Slate
-		handle.Color = (radius > 1) and Color3.fromRGB(120, 30, 30) or Color3.fromRGB(25, 25, 25)
+		local handle = ToolService.createBombHandle(radius)
 		handle.Parent = tool
 		tool.Parent = backpack
 	end
@@ -717,59 +560,17 @@ end
 local updateBackpackModel = function() end
 
 Players.PlayerAdded:Connect(function(player)
-	local leaderstats = Instance.new("Folder")
-	leaderstats.Name = "leaderstats"
-	leaderstats.Parent = player
-
-	local money = Instance.new("IntValue")
-	money.Name = "Coins"
-	money.Value = 0
-	money.Parent = leaderstats
-
-	local totalBlocks = Instance.new("IntValue")
-	totalBlocks.Name = "TotalBlocks"
-	totalBlocks.Value = 0
-	totalBlocks.Parent = leaderstats
-
-	local sandCount = Instance.new("IntValue")
-	sandCount.Name = "Sand"
-	sandCount.Value = 0
-	sandCount.Parent = leaderstats
-
-	local maxSand = Instance.new("IntValue")
-	maxSand.Name = "MaxSand"
-	maxSand.Value = MAX_BACKPACK_CAPPED
-	maxSand.Parent = player
-
-	local currentPickaxe = Instance.new("StringValue")
-	currentPickaxe.Name = "CurrentPickaxe"
-	currentPickaxe.Value = "拳頭"
-	currentPickaxe.Parent = player
-
-	local bombCount = Instance.new("IntValue")
-	bombCount.Name = "BombCount"
-	bombCount.Value = 0
-	bombCount.Parent = player
-
-	local clusterBombCount = Instance.new("IntValue")
-	clusterBombCount.Name = "ClusterBombCount"
-	clusterBombCount.Value = 0
-	clusterBombCount.Parent = player
-
-	local hasSandPet = Instance.new("BoolValue")
-	hasSandPet.Name = "HasSandPet"
-	hasSandPet.Value = false
-	hasSandPet.Parent = player
-
-	local potions = Instance.new("Folder")
-	potions.Name = "Potions"
-	potions.Parent = player
-	for _, potionName in ipairs({ "Strength", "Luck", "Speed" }) do
-		local count = Instance.new("IntValue")
-		count.Name = potionName
-		count.Value = 1
-		count.Parent = potions
-	end
+	local playerValues = PlayerDataService.ensurePlayerValues(player, { MaxSand = MAX_BACKPACK_CAPPED })
+	local leaderstats = playerValues.leaderstats
+	local money = playerValues.Coins
+	local totalBlocks = playerValues.TotalBlocks
+	local sandCount = playerValues.Sand
+	local maxSand = playerValues.MaxSand
+	local currentPickaxe = playerValues.CurrentPickaxe
+	local bombCount = playerValues.BombCount
+	local clusterBombCount = playerValues.ClusterBombCount
+	local hasSandPet = playerValues.HasSandPet
+	local potions = playerValues.Potions
 	local dailyQuests = getOrCreateDailyQuests(player)
 
 	local ownedTools = getOwnedToolsFolder(player)
@@ -936,192 +737,14 @@ end)
 
 
 local function createCatalogModel(parent, itemData, pivotCFrame)
-	local model = Instance.new("Model")
-	model.Name = itemData.id .. "_Preview"
-	model.Parent = parent
-
-	local visual = itemData.model
-	local mainPart
-	if visual.kind == "pickaxe" then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "Handle"
-		mainPart.Size = Vector3.new(0.35, 3.2, 0.35)
-		mainPart.Material = Enum.Material.Wood
-		mainPart.Color = Color3.fromRGB(125, 78, 38)
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame * CFrame.Angles(0, 0, math.rad(25))
-		mainPart.Parent = model
-
-		local head = Instance.new("Part")
-		head.Name = "Head"
-		head.Size = Vector3.new(2.4, 0.35, 0.35)
-		head.Material = visual.material
-		head.Color = visual.color
-		head.Anchored = true
-		head.CFrame = mainPart.CFrame * CFrame.new(0, 1.35, 0)
-		head.Parent = model
-	elseif visual.kind == "bomb" then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "BombBody"
-		mainPart.Shape = Enum.PartType.Ball
-		mainPart.Size = Vector3.new(2.2, 2.2, 2.2)
-		mainPart.Material = visual.material
-		mainPart.Color = visual.color
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame
-		mainPart.Parent = model
-	elseif visual.kind == "backpack" then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "BackpackBody"
-		mainPart.Size = Vector3.new(2.2, 2.8, 1.2)
-		mainPart.Material = visual.material
-		mainPart.Color = visual.color
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame
-		mainPart.Parent = model
-	elseif itemData.sourceName then
-		local source = getItemStorageFolder():FindFirstChild(itemData.sourceName)
-			or (Workspace:FindFirstChild("LocalShopPreviewModels") and Workspace.LocalShopPreviewModels:FindFirstChild(itemData.sourceName))
-		if source then
-			local clone = source:Clone()
-			clone.Name = itemData.id .. "_Model"
-			clone.Parent = model
-			mainPart = clone:IsA("BasePart") and clone or clone:FindFirstChildWhichIsA("BasePart", true)
-			if mainPart then
-				model.PrimaryPart = mainPart
-				model:PivotTo(pivotCFrame)
-			end
-		end
-	end
-	if not mainPart then
-		mainPart = Instance.new("Part")
-		mainPart.Name = "DisplayBlock"
-		mainPart.Size = visual.size or Vector3.new(2, 2, 2)
-		mainPart.Material = visual.material
-		mainPart.Color = visual.color
-		mainPart.Anchored = true
-		mainPart.CFrame = pivotCFrame
-		mainPart.Parent = model
-	end
-
-	model.PrimaryPart = mainPart
-	return model
+	return ModelFactory.createCatalogModel(parent, itemData, pivotCFrame, {
+		sourceInstance = findCatalogSourceModel(itemData),
+	})
 end
 
 
-local function getOrCreateChild(parent, className, name)
-	local existing = parent:FindFirstChild(name)
-	if existing and existing.ClassName == className then
-		return existing, false
-	elseif existing then
-		existing:Destroy()
-	end
-	local created = Instance.new(className)
-	created.Name = name
-	created.Parent = parent
-	return created, true
-end
-
-local function configureGuiButton(parent, name, text, size, position)
-	local button, created = getOrCreateChild(parent, "ImageButton", name)
-	button.Size = size
-	button.Position = position
-	button.BackgroundColor3 = Color3.fromRGB(35, 48, 72)
-	button.Image = ""
-	button.AutoButtonColor = true
-	local label = button:FindFirstChild("Label")
-	if not label then
-		label = Instance.new("TextLabel")
-		label.Name = "Label"
-		label.BackgroundTransparency = 1
-		label.Size = UDim2.new(1, -10, 1, -8)
-		label.Position = UDim2.fromOffset(5, 4)
-		label.TextColor3 = Color3.fromRGB(255, 255, 255)
-		label.TextScaled = true
-		label.Parent = button
-	end
-	label.Text = text
-	if created then
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 10)
-		corner.Parent = button
-	end
-	return button, created
-end
-
-local function ensureStarterGuiTemplate()
-	local gui, guiCreated = getOrCreateChild(StarterGui, "ScreenGui", "MiningHud")
-	if guiCreated then
-		gui.ResetOnSpawn = false
-	end
-
-	local infoLabel, infoCreated = getOrCreateChild(gui, "TextLabel", "WorldInfo")
-	if infoCreated then
-		infoLabel.Size = UDim2.fromOffset(260, 58)
-		infoLabel.Position = UDim2.fromOffset(16, 16)
-		infoLabel.BackgroundTransparency = 0.25
-		infoLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-		infoLabel.TextColor3 = Color3.fromRGB(255, 245, 210)
-		infoLabel.TextWrapped = true
-		infoLabel.TextScaled = true
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 12)
-		corner.Parent = infoLabel
-	end
-
-	configureGuiButton(gui, "TeleportHomeButton", "一鍵回城", UDim2.fromOffset(120, 42), UDim2.fromOffset(16, 160))
-	local fullButton, fullButtonCreated = configureGuiButton(gui, "FullBackpackReturnButton", "背包已滿！返回商城", UDim2.fromOffset(260, 58), UDim2.new(0.5, -130, 0.52, 0))
-	if fullButton and fullButtonCreated then
-		fullButton.BackgroundColor3 = Color3.fromRGB(170, 80, 35)
-		fullButton.Visible = false
-	end
-
-	local shopFrame, shopCreated = getOrCreateChild(gui, "Frame", "ShopFrame")
-	if shopCreated then
-		shopFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-		shopFrame.Size = UDim2.fromOffset(620, 180)
-		shopFrame.Position = UDim2.new(0.5, 0, 1, -110)
-		shopFrame.BackgroundColor3 = Color3.fromRGB(64, 42, 24)
-		shopFrame.Visible = false
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 16)
-		corner.Parent = shopFrame
-	end
-	configureGuiButton(shopFrame, "CloseButton", "X", UDim2.fromOffset(36, 36), UDim2.new(1, -44, 0, 8))
-	configureGuiButton(shopFrame, "PreviousItem", "◀ 上一個", UDim2.fromOffset(120, 46), UDim2.fromOffset(20, 118))
-	configureGuiButton(shopFrame, "BuySelected", "購買 / 使用", UDim2.fromOffset(320, 46), UDim2.fromOffset(150, 118))
-	configureGuiButton(shopFrame, "NextItem", "下一個 ▶", UDim2.fromOffset(120, 46), UDim2.fromOffset(480, 118))
-
-	local title, titleCreated = getOrCreateChild(shopFrame, "TextLabel", "Title")
-	if titleCreated then
-		title.Text = "礦工棚子商店"
-		title.Size = UDim2.new(1, -64, 0, 36)
-		title.Position = UDim2.fromOffset(16, 8)
-		title.BackgroundTransparency = 1
-		title.TextColor3 = Color3.fromRGB(255, 235, 190)
-		title.TextScaled = true
-	end
-
-	local description, descriptionCreated = getOrCreateChild(shopFrame, "TextLabel", "Description")
-	if descriptionCreated then
-		description.Size = UDim2.new(1, -40, 0, 56)
-		description.Position = UDim2.fromOffset(20, 48)
-		description.BackgroundTransparency = 0.25
-		description.BackgroundColor3 = Color3.fromRGB(45, 30, 18)
-		description.TextColor3 = Color3.fromRGB(255, 235, 190)
-		description.TextWrapped = true
-		description.TextScaled = true
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 12)
-		corner.Parent = description
-	end
-
-	local oldProgress = gui:FindFirstChild("MiningProgress")
-	if oldProgress then
-		oldProgress:Destroy()
-	end
-end
-ensureStarterGuiTemplate()
+-- GUI 現在由 StarterGui.MiningHud 底下的 LocalScript 自行維護；
+-- 伺服器不再每次啟動重建介面，方便直接複製 MiningHud 後獨立使用。
 
 -- ==================== 2. 建立齊平場地與實體商店 ====================
 local function createShopWorld()
@@ -1146,8 +769,7 @@ local function createShopWorld()
 	createPartIfMissing("SecureFloor", function(secureFloor)
 		secureFloor.Size = STEEL_FLOOR_SIZE
 		secureFloor.Position = Vector3.new(0, -STEEL_FLOOR_SIZE.Y / 2, -25)
-		secureFloor.Material = Enum.Material.Metal
-		secureFloor.Color = Color3.fromRGB(125, 135, 145)
+		ModelFactory.applyStyle(secureFloor, MiningVisuals.Shop.SecureFloor)
 		secureFloor.Anchored = true
 		secureFloor.CanCollide = true
 	end)
@@ -1155,16 +777,14 @@ local function createShopWorld()
 	createPartIfMissing("WoodDeck", function(deck)
 		deck.Size = Vector3.new(18, 0.4, 16)
 		deck.Position = SHOP_POSITION + Vector3.new(0, 0.2, -2)
-		deck.Material = Enum.Material.WoodPlanks
-		deck.Color = Color3.fromRGB(139, 92, 50)
+		ModelFactory.applyStyle(deck, MiningVisuals.Shop.WoodDeck)
 		deck.Anchored = true
 	end)
 
 	createPartIfMissing("CanvasCanopy", function(roof)
 		roof.Size = Vector3.new(22, 0.6, 18)
 		roof.Position = SHOP_POSITION + Vector3.new(0, 8, -2)
-		roof.Material = Enum.Material.Fabric
-		roof.Color = Color3.fromRGB(205, 60, 45)
+		ModelFactory.applyStyle(roof, MiningVisuals.Shop.CanvasCanopy)
 		roof.Anchored = true
 	end)
 
@@ -1178,8 +798,7 @@ local function createShopWorld()
 		createPartIfMissing("ShedPost" .. index, function(post)
 			post.Size = Vector3.new(1, 8, 1)
 			post.Position = SHOP_POSITION + offset
-			post.Material = Enum.Material.Wood
-			post.Color = Color3.fromRGB(105, 68, 36)
+			ModelFactory.applyStyle(post, MiningVisuals.Shop.ShedPost)
 			post.Anchored = true
 		end)
 	end
@@ -1188,8 +807,7 @@ local function createShopWorld()
 		shopZone.Shape = Enum.PartType.Cylinder
 		shopZone.Size = Vector3.new(0.25, 18, 18)
 		shopZone.CFrame = CFrame.new(SHOP_POSITION + Vector3.new(0, 0.08, 0)) * CFrame.Angles(0, 0, math.rad(90))
-		shopZone.Material = Enum.Material.Neon
-		shopZone.Color = Color3.fromRGB(80, 210, 255)
+		ModelFactory.applyStyle(shopZone, MiningVisuals.Shop.ShopOpenZone)
 		shopZone.Transparency = 0.55
 		shopZone.Anchored = true
 		shopZone.CanCollide = false
@@ -1199,24 +817,21 @@ local function createShopWorld()
 	createPartIfMissing("ShopCounter", function(shopCounter)
 		shopCounter.Size = Vector3.new(8, 3, 2)
 		shopCounter.Position = SHOP_POSITION + Vector3.new(0, 1.5, -7)
-		shopCounter.Material = Enum.Material.WoodPlanks
-		shopCounter.Color = Color3.fromRGB(157, 107, 63)
+		ModelFactory.applyStyle(shopCounter, MiningVisuals.Shop.ShopCounter)
 		shopCounter.Anchored = true
 	end)
 
 	createPartIfMissing("ShopSign", function(sign)
 		sign.Size = Vector3.new(10, 2, 0.4)
 		sign.Position = SHOP_POSITION + Vector3.new(0, 6, -7.3)
-		sign.Material = Enum.Material.WoodPlanks
-		sign.Color = Color3.fromRGB(118, 74, 34)
+		ModelFactory.applyStyle(sign, MiningVisuals.Shop.ShopSign)
 		sign.Anchored = true
 	end)
 
 	createPartIfMissing("ShopPreviewBase", function(previewBase)
 		previewBase.Size = Vector3.new(10, 0.5, 10)
 		previewBase.Position = SHOP_PREVIEW_POSITION + Vector3.new(0, 0.25, 0)
-		previewBase.Material = Enum.Material.WoodPlanks
-		previewBase.Color = Color3.fromRGB(120, 75, 35)
+		ModelFactory.applyStyle(previewBase, MiningVisuals.Shop.ShopPreviewBase)
 		previewBase.Anchored = true
 	end)
 
@@ -1260,8 +875,7 @@ local function createShopWorld()
 		base.Name = "ItemBackground"
 		base.Size = Vector3.new(4.8, 0.35, 3.8)
 		base.Position = SHOP_POSITION + Vector3.new(offsetX, 1.15, -11.5)
-		base.Material = Enum.Material.WoodPlanks
-		base.Color = Color3.fromRGB(91, 58, 31)
+		ModelFactory.applyStyle(base, MiningVisuals.Shop.ItemStand)
 		base.Anchored = true
 		base.Parent = itemStand
 		createCatalogModel(itemStand, catalogItem, CFrame.new(base.Position + Vector3.new(0, 2.2, 0)))
@@ -1683,17 +1297,20 @@ end
 
 getSurfaceBiome = function(bx, bz)
 	local n = math.noise(bx * 0.055, bz * 0.055, WORLD_SEED + 117)
+	local biomeName = "grass"
 	if n < -0.42 then
-		return "white_sand", Color3.fromRGB(238, 226, 196), Enum.Material.Sand
+		biomeName = "white_sand"
 	elseif n < -0.08 then
-		return "clay", Color3.fromRGB(150, 86, 58), Enum.Material.Ground
+		biomeName = "clay"
 	elseif n < 0.32 then
-		return "mud", Color3.fromRGB(104, 75, 49), Enum.Material.Mud
+		biomeName = "mud"
 	elseif n < 0.58 then
-		return "red_sand", Color3.fromRGB(198, 94, 58), Enum.Material.Sand
+		biomeName = "red_sand"
 	end
-	return "grass", Color3.fromRGB(75, 150, 70), Enum.Material.Grass
+	local biome = MiningVisuals.Biomes[biomeName] or MiningVisuals.Biomes.grass
+	return biomeName, biome.color, biome.material
 end
+
 
 local function shouldSpawnCactus(bx, bz)
 	local cactusNoise = math.noise(bx * 0.19, bz * 0.19, WORLD_SEED + 83)
@@ -1804,8 +1421,7 @@ local function instanceBlock(bx, by, bz)
 	local isSurface = by == getSurfaceHeight(bx, bz)
 	local biomeName = nil
 	if pyramid then
-		part.Material = Enum.Material.Sandstone
-		part.Color = Color3.fromRGB(214, 174, 94)
+		ModelFactory.applyStyle(part, MiningVisuals.Defaults.PyramidBlock)
 	elseif ore then
 		part.Material = ore.material
 		part.Color = ore.color
@@ -1821,8 +1437,7 @@ local function instanceBlock(bx, by, bz)
 		water.Name = "OasisWater"
 		water.Size = Vector3.new(BLOCK_SIZE * 0.9, 0.16, BLOCK_SIZE * 0.9)
 		water.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.09, 0)
-		water.Material = Enum.Material.Water
-		water.Color = Color3.fromRGB(55, 170, 185)
+		ModelFactory.applyStyle(water, MiningVisuals.Defaults.Water)
 		water.Transparency = 0.25
 		water.Anchored = true
 		water.CanCollide = false
@@ -1832,37 +1447,14 @@ local function instanceBlock(bx, by, bz)
 	if isSurface and biomeName == "grass" and shouldSpawnTree(bx, bz) then
 		local tree = cloneEditableWorldModel("Tree", blockModel, CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2, 0)))
 		if not tree then
-			local trunk = Instance.new("Part")
-			trunk.Name = "Tree"
-			trunk.Size = Vector3.new(1.1, 5, 1.1)
-			trunk.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 2.5, 0)
-			trunk.Material = Enum.Material.Wood
-			trunk.Color = Color3.fromRGB(95, 60, 32)
-			trunk.Anchored = true
-			trunk.Parent = blockModel
-			local leaves = Instance.new("Part")
-			leaves.Name = "Leaves"
-			leaves.Shape = Enum.PartType.Ball
-			leaves.Size = Vector3.new(4.4, 4.4, 4.4)
-			leaves.Position = trunk.Position + Vector3.new(0, 3.2, 0)
-			leaves.Material = Enum.Material.Grass
-			leaves.Color = Color3.fromRGB(55, 135, 55)
-			leaves.Anchored = true
-			leaves.Parent = blockModel
+			ModelFactory.createFallbackTree(blockModel, part.Position, BLOCK_SIZE)
 		end
 	end
 
 	if isSurface and shouldSpawnDeadwood(bx, bz) then
 		local editableDeadwood = cloneEditableWorldModel("Deadwood", blockModel, CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.3, 0)))
 		if not editableDeadwood then
-			local log = Instance.new("Part")
-		log.Name = "Deadwood"
-		log.Size = Vector3.new(math.random(22, 34) / 10, 0.45, 0.45)
-		log.CFrame = CFrame.new(part.Position + Vector3.new(0, BLOCK_SIZE / 2 + 0.3, 0)) * CFrame.Angles(math.rad(math.random(-8, 8)), math.rad(math.random(0, 180)), math.rad(math.random(-8, 8)))
-		log.Material = Enum.Material.Wood
-		log.Color = Color3.fromRGB(92, 63, 39)
-		log.Anchored = true
-			log.Parent = blockModel
+			ModelFactory.createFallbackDeadwood(blockModel, part.Position, BLOCK_SIZE)
 		end
 	end
 
@@ -1872,14 +1464,8 @@ local function instanceBlock(bx, by, bz)
 			spawnedParts[key] = blockModel
 			return
 		end
-		local cactus = Instance.new("Part")
-		cactus.Name = "Cactus"
-		cactus.Size = Vector3.new(1.6, math.random(4, 7) * CACTUS_HEIGHT_SCALE, 1.6)
-		cactus.Position = part.Position + Vector3.new(0, BLOCK_SIZE / 2 + cactus.Size.Y / 2, 0)
-		cactus.Material = Enum.Material.Grass
-		cactus.Color = Color3.fromRGB(35, 135, 55)
-		cactus.Anchored = true
-		cactus.Parent = blockModel
+		local height = math.random(4, 7) * CACTUS_HEIGHT_SCALE
+		ModelFactory.createFallbackCactus(blockModel, part.Position, BLOCK_SIZE, height)
 	end
 
 	spawnedParts[key] = blockModel
